@@ -1,0 +1,25 @@
+# Core runtime -- needed to actually dictate.
+sounddevice>=0.4.6      # microphone capture (PortAudio)
+numpy>=1.26             # audio buffers
+pynput>=1.7.7           # global hotkeys + keystroke injection
+PySide6>=6.8            # main window, recording pill, tray (Qt)
+pyperclip>=1.8.2        # paste-mode injection
+pillow>=10.0            # app icon rendering (.ico + tray states)
+pycaw>=20240210         # mute/restore other apps' audio while dictating
+
+# Local speech-to-text. onnx-asr runs NVIDIA Parakeet on CPU with nothing but
+# numpy + onnxruntime -- no PyTorch, no ctranslate2, no ffmpeg. This is the
+# default local backend; see docs/research-2026-08.md.
+onnx-asr[cpu,hub]>=0.12.0
+
+# Optional local backend, tuned for short utterances (dictation-shaped audio).
+# Add "moonshine" to stt.backends to use it.
+moonshine-voice>=0.1.0
+
+# Third local fallback. Heavier (ctranslate2 + av) and only reached if the two
+# above are unavailable -- install if you want the belt-and-braces chain.
+# faster-whisper>=1.0.3
+
+# Note: the LLM layer (Ollama / Gemini) and the Groq STT client speak plain
+# HTTP through urllib -- no SDKs, nothing to install, nothing to import at
+# startup. The text-cleanup package and its test harness are pure stdlib.

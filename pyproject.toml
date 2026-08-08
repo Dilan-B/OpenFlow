@@ -1,0 +1,33 @@
+[project]
+name = "openflow"
+version = "0.1.0"
+description = "System-wide voice-to-text with LLM transcript cleanup"
+requires-python = ">=3.11"
+dependencies = [
+    "sounddevice>=0.4.6",
+    "numpy>=1.26",
+    "pynput>=1.7.7",
+    "PySide6>=6.8",
+    "pyperclip>=1.8.2",
+    "pillow>=10.0",
+    "pycaw>=20240210",
+    "onnx-asr[cpu,hub]>=0.12.0",
+]
+
+[project.optional-dependencies]
+moonshine = ["moonshine-voice>=0.1.0"]
+whisper = ["faster-whisper>=1.0.3"]
+
+[project.scripts]
+openflow = "openflow.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["openflow*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
