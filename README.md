@@ -1,5 +1,9 @@
 # OpenFlow
 
+**[⬇ Download OpenFlowSetup.exe](https://github.com/Dilan-B/OpenFlow/releases/latest/download/OpenFlowSetup.exe)**
+— Windows installer, no Python required. Run it, then launch OpenFlow from the
+Start Menu or Desktop.
+
 System-wide voice-to-text for Windows/macOS/Linux. Hold a hotkey, talk, release
 — cleaned-up text lands in whatever app had your cursor. Implements
 `wispr_flow_clone_spec-v2.pdf` (PRD v2.0).
