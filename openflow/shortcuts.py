@@ -4,8 +4,9 @@ Creates .lnk files by driving WScript.Shell through a throwaway VBScript, so
 this needs no pywin32 -- one less dependency for a feature that runs twice in
 the app's lifetime.
 
-Everything launches ``pythonw.exe``, which has no console window: the point is
-that OpenFlow is an app, not a terminal session.
+Launchers point at the packaged OpenFlow.exe when there is one and at
+``pythonw.exe -m openflow`` from a source checkout -- either way at something
+with no console window, because OpenFlow is an app, not a terminal session.
 """
 
 from __future__ import annotations
@@ -22,6 +23,11 @@ log = logging.getLogger(__name__)
 APP_NAME = "OpenFlow"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# In a PyInstaller build __file__ points inside _internal/, so PROJECT_ROOT is
+# meaningless there and sys.executable is OpenFlow.exe rather than an
+# interpreter. Every path decision below has to branch on this.
+FROZEN = bool(getattr(sys, "frozen", False))
+
 
 def pythonw() -> Path:
     """The windowed interpreter next to the current one."""
@@ -31,12 +37,39 @@ def pythonw() -> Path:
 
 
 def app_target() -> tuple[Path, str]:
-    """What a launcher should run: the packaged exe when it exists, else
-    pythonw + module. Returns (target, arguments)."""
+    """What a launcher should run: the running exe when frozen, the packaged
+    exe when one has been built, else pythonw + module. Returns
+    (target, arguments).
+
+    The frozen branch matters: without it sys.executable falls through to the
+    pythonw() fallback and the shortcut becomes ``OpenFlow.exe -m openflow``,
+    which argparse rejects -- the app dies with exit code 2 at sign-in.
+    """
+    if FROZEN:
+        return Path(sys.executable).resolve(), ""
     packaged = PROJECT_ROOT / "dist" / "OpenFlow" / "OpenFlow.exe"
     if packaged.exists():
         return packaged, ""
     return pythonw(), "-m openflow"
+
+
+def app_workdir() -> Path:
+    """Working directory for a launcher. Frozen builds run from the install
+    directory; a source checkout runs from the repo root."""
+    if FROZEN:
+        return Path(sys.executable).resolve().parent
+    return PROJECT_ROOT
+
+
+def app_icon() -> Path | None:
+    """Icon for a launcher. The frozen exe already carries the .ico as a
+    resource, so point at it and skip generating a stray file next to the
+    install."""
+    if FROZEN:
+        return Path(sys.executable).resolve()
+    from .ui.icon import ensure_ico
+
+    return ensure_ico()
 
 
 def desktop_dir() -> Path:
@@ -78,6 +111,9 @@ link.Save
         subprocess.run(
             ["cscript", "//Nologo", str(vbs)],
             check=True, capture_output=True, timeout=20,
+            # cscript is a console program: without this a windowed build
+            # flashes a black box on screen every time a switch is flipped.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     finally:
         vbs.unlink(missing_ok=True)
@@ -90,10 +126,9 @@ def install_shortcuts(desktop: bool = True, start_menu: bool = True) -> list[Pat
         raise RuntimeError("shortcut installation is Windows-only")
 
     created: list[Path] = []
-    from .ui.icon import ensure_ico
-
-    icon = ensure_ico()
+    icon = app_icon()
     run_target, arguments = app_target()
+    workdir = app_workdir()
     targets = []
     if desktop:
         targets.append(desktop_dir() / f"{APP_NAME}.lnk")
@@ -106,7 +141,7 @@ def install_shortcuts(desktop: bool = True, start_menu: bool = True) -> list[Pat
                 target,
                 run_target,
                 arguments,
-                PROJECT_ROOT,
+                workdir,
                 "OpenFlow — system-wide voice to text",
                 icon,
             )
@@ -124,16 +159,14 @@ def set_launch_at_login(enabled: bool) -> Path | None:
         link.unlink(missing_ok=True)
         return None
 
-    from .ui.icon import ensure_ico
-
     run_target, arguments = app_target()
     return _create_shortcut(
         link,
         run_target,
         (arguments + " --minimized").strip(),
-        PROJECT_ROOT,
+        app_workdir(),
         "Start OpenFlow at sign-in",
-        ensure_ico(),
+        app_icon(),
     )
 
 

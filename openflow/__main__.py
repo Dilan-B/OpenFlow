@@ -10,21 +10,40 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .config import CONFIG_PATH, Config
 
 
-def _configure_logging(verbose: bool) -> None:
+def _ensure_stdio() -> bool:
+    """Give a windowed build somewhere to write. Returns True when there was
+    no console to begin with.
+
+    Under pythonw.exe and PyInstaller's --noconsole, sys.stdout and sys.stderr
+    are None, and anything that writes to them raises AttributeError from a
+    place that never expected to fail: argparse's usage message on a bad
+    argument, huggingface_hub's download progress bar while the local STT
+    weights load. Point them at the null device so those paths are boring.
+    """
+    windowed = False
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            windowed = True
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+    return windowed
+
+
+def _configure_logging(verbose: bool, windowed: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
 
-    # Under pythonw.exe there is no console: sys.stderr is None, and a
-    # StreamHandler pointed at it raises on the first log record. Fall back to
-    # a rotating file in the config directory.
-    if sys.stderr is None:
+    # With no console there is nothing behind sys.stderr but the null device,
+    # so a StreamHandler would silently discard every record. Fall back to a
+    # rotating file in the config directory.
+    if windowed:
         from logging.handlers import RotatingFileHandler
 
         from .config import CONFIG_DIR
@@ -108,6 +127,10 @@ def _check(config: Config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Before argparse: a usage error in a windowed build writes to sys.stderr,
+    # and if that is None the app dies with no window and no message.
+    windowed = _ensure_stdio()
+
     parser = argparse.ArgumentParser(prog="openflow", description="System-wide voice-to-text.")
     parser.add_argument("--check", action="store_true", help="report backend readiness and exit")
     parser.add_argument("--write-config", action="store_true",
@@ -123,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    _configure_logging(args.verbose)
+    _configure_logging(args.verbose, windowed)
     config = Config.load()
 
     if args.write_config:
