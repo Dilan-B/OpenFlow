@@ -110,6 +110,9 @@ class UiConfig:
     start_minimized: bool = False    # launch straight to the tray
     close_to_tray: bool = True       # X hides the window, app keeps listening
     history_limit: int = 50
+    # What to call you on the dictation page. Asked once on first run; empty
+    # falls back to the Windows account name, which is often not a real name.
+    display_name: str = ""
 
 
 @dataclass(slots=True)
@@ -132,6 +135,10 @@ class Config:
     ui: UiConfig = field(default_factory=UiConfig)
     injection: InjectionConfig = field(default_factory=InjectionConfig)
     log_transcripts: bool = False   # off by default: dictation is sensitive
+    # Set once the first-run welcome has been answered or dismissed. Separate
+    # from ui.display_name so that skipping the prompt, or clearing the name
+    # later, does not make the app ask again on every launch.
+    onboarded: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":

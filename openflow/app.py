@@ -92,6 +92,11 @@ class OpenFlowApp:
             return 0
         self.single_instance.activate_requested.connect(self.show_window)
 
+        # Ask before the main window is built: the dictation page bakes the
+        # greeting into a label at construction time.
+        if not self.config.onboarded:
+            self._ask_for_name()
+
         self.window = MainWindow(
             self.config, self.history, self.personal,
             callbacks={
@@ -149,6 +154,22 @@ class OpenFlowApp:
             return qt_app.exec()
         finally:
             self.shutdown()
+
+    def _ask_for_name(self) -> None:
+        """First-run greeting prompt. Never fatal: a failure here must not
+        cost someone their dictation hotkey."""
+        if self.config.ui.start_minimized:
+            # Launched to the tray at sign-in -- nobody is watching. Leave
+            # onboarded False and ask on the next ordinary launch.
+            return
+        try:
+            from .ui.main_window import _account_name
+            from .ui.welcome import ask_for_name
+
+            name = ask_for_name(self.config, suggestion=_account_name())
+            log.info("first run: greeting set to %r", name or "(skipped)")
+        except Exception as exc:
+            log.warning("welcome prompt failed: %s", exc)
 
     def _warm(self) -> None:
         self.stt.warm()

@@ -68,9 +68,17 @@ TRANSFORMS = [
 ]
 
 
-def _first_name() -> str:
+def _account_name() -> str:
+    """Best guess at a first name from the OS account. Used to prefill the
+    first-run prompt and as the fallback when someone skips it."""
     raw = os.environ.get("USERNAME") or os.environ.get("USER") or ""
-    return raw.split(".")[0].split("_")[0].capitalize() or "there"
+    return raw.split(".")[0].split("_")[0].capitalize()
+
+
+def _first_name(configured: str = "") -> str:
+    """What to call the person. Their own answer wins; the account name is
+    only a fallback, and "there" covers an account with no usable name."""
+    return (configured or "").strip() or _account_name() or "there"
 
 
 def logo_pixmap(size: int = 26) -> QPixmap:
@@ -478,7 +486,7 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------- dictation
     def _page_dictation(self, holder: QWidget) -> None:
         layout = self._page_layout(holder)
-        title = QLabel(f"Welcome back, {_first_name()}")
+        title = QLabel(f"Welcome back, {_first_name(self.config.ui.display_name)}")
         title.setObjectName("H1")
         layout.addWidget(title)
 
