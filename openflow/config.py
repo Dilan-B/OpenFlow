@@ -24,6 +24,10 @@ class HotkeyConfig:
     # push_to_talk: record while held. toggle: press once to start, again to stop.
     mode: str = "push_to_talk"
     cancel: str = "<esc>"
+    # Replace the last insertion with the raw transcript -- "that is not what I
+    # said". Ctrl+Shift+Z sits next to the universal undo without colliding
+    # with it, so the app's own undo and the host app's stay separate.
+    undo: str = "<ctrl>+<shift>+z"
     # Ignore key-repeat chatter from a held key (milliseconds).
     debounce_ms: int = 120
 
@@ -55,6 +59,12 @@ class SttConfig:
     # int8 by default: the fp32 encoder is a 2.3 GB download and loads slowly,
     # which is the wrong trade for a hotkey-driven dictation tool.
     parakeet_quantization: str = "int8"  # "" for fp32
+    # ONNX Runtime execution provider: auto | cpu | cuda | directml | coreml.
+    # "auto" means CPU, which measured fastest for int8 Parakeet on the
+    # hardware in docs/research-2026-08.md -- a transducer's decode loop is
+    # dispatch-latency bound, which is not what a GPU helps with. Ask for a GPU
+    # by name only, and benchmark it first with scripts/bench_providers.py.
+    device: str = "auto"
     # Moonshine: opt in by adding "moonshine" to backends. TINY | BASE |
     # SMALL_STREAMING | MEDIUM_STREAMING.
     moonshine_arch: str = "BASE"
@@ -93,6 +103,12 @@ class LlmConfig:
     # Run the deterministic pass before the LLM so a slow/broken model still
     # leaves you with cleaned-up text.
     rules_prepass: bool = True
+    # Only pay the LLM's latency when the rules pass says it was unsure -- it
+    # found a retraction pivot but could not tell how much the speaker threw
+    # away. Measured here, every backend produced identical output on ordinary
+    # dictation while costing 585 ms (Gemini) to 2,700 ms (local 8B), so on the
+    # common path the model is buying nothing. Set False to always call it.
+    only_when_uncertain: bool = True
 
 
 @dataclass(slots=True)
@@ -127,6 +143,42 @@ class InjectionConfig:
 
 
 @dataclass(slots=True)
+class UpdateConfig:
+    """Check GitHub for a newer release. One anonymous request, no auto-install
+    -- see openflow/updates.py."""
+
+    check_on_startup: bool = True
+    interval_hours: int = 24
+    last_checked_at: float = 0.0
+    # Tag the user chose to stop being told about.
+    skipped_version: str = ""
+
+
+@dataclass(slots=True)
+class ProfileConfig:
+    """Reshape output for the app it is about to land in -- no trailing full
+    stop in a terminal, straight quotes in a code editor. See profiles.py."""
+
+    enabled: bool = True
+    # Extra "executable.exe": "profile" mappings, merged over the built-ins.
+    # Profiles are prose | code | shell | chat.
+    apps: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class CaptureConfig:
+    """Opt-in local dataset capture, for building a real evaluation set.
+
+    Off by default and never transmitted anywhere -- see openflow/capture.py.
+    """
+
+    enabled: bool = False
+    # Recording your voice is a bigger ask than keeping a sentence, so it is a
+    # separate decision even once capture is on.
+    audio: bool = False
+
+
+@dataclass(slots=True)
 class Config:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -134,6 +186,9 @@ class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     ui: UiConfig = field(default_factory=UiConfig)
     injection: InjectionConfig = field(default_factory=InjectionConfig)
+    profiles: ProfileConfig = field(default_factory=ProfileConfig)
+    updates: UpdateConfig = field(default_factory=UpdateConfig)
+    capture: CaptureConfig = field(default_factory=CaptureConfig)
     log_transcripts: bool = False   # off by default: dictation is sensitive
     # Set once the first-run welcome has been answered or dismissed. Separate
     # from ui.display_name so that skipping the prompt, or clearing the name

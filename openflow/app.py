@@ -22,20 +22,28 @@ import time
 from .audio.conditioning import condition, is_silent, measure
 from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
+from .capture import Capture
 from .config import Config
+from .exits import EXIT_NO_HOTKEY, EXIT_NO_MICROPHONE, EXIT_OK
 from .history import Entry, History
 from .input.hotkeys import HotkeyListener, HotkeyUnavailable
 from .input.injector import Injector
 from .llm.cleaner import LLMCleaner
 from .llm.quota import QuotaLedger
 from .personalization import shared as personalization
+from .profiles import DEFAULT, apply_profile, foreground_process, profile_for
 from .stt.engines import SttError, build_engine
 from .stt.router import SttRouter
+from .text.hallucinations import is_silence_hallucination
 
 log = logging.getLogger(__name__)
 
 FRAME_MS = 16          # ~60 fps pill animation
 MIN_AUDIO_S = 0.25     # shorter than this is a mis-press, not speech
+# How long undo stays available. It works by sending backspaces, so it is only
+# correct while the caret has not moved; past this we refuse rather than risk
+# deleting something the user typed.
+UNDO_WINDOW_S = 15.0
 
 TRANSFORM_PROMPTS = {
     "formal": "Rewrite the user's text in a clear, professional register. Preserve "
@@ -58,7 +66,12 @@ class OpenFlowApp:
         self.injector = Injector(self.config.injection)
         self.ducker = AudioDucker()
         self.personal = personalization()
+        self.capture = Capture(self.config)
         self.hotkeys: HotkeyListener | None = None
+        # (raw, cleaned, capture id, monotonic time) of the last insertion.
+        self._last_insertion: tuple[str, str, str | None, float] | None = None
+        # Executable the text is headed for, sampled when the hotkey goes down.
+        self._target_app = ""
 
         self.window = None
         self.overlay = None
@@ -89,7 +102,7 @@ class OpenFlowApp:
         self.single_instance = SingleInstance()
         if not self.single_instance.acquire():
             log.info("OpenFlow is already running; showing that window instead")
-            return 0
+            return EXIT_OK
         self.single_instance.activate_requested.connect(self.show_window)
 
         # Ask before the main window is built: the dictation page bakes the
@@ -121,7 +134,7 @@ class OpenFlowApp:
             self.recorder.open()
         except AudioUnavailable as exc:
             log.error("microphone unavailable: %s", exc)
-            return 2
+            return EXIT_NO_MICROPHONE
 
         threading.Thread(target=self._worker, name="openflow-worker", daemon=True).start()
         threading.Thread(target=self._warm, name="openflow-warm", daemon=True).start()
@@ -131,12 +144,13 @@ class OpenFlowApp:
             on_start=self._on_hotkey_start,
             on_stop=self._on_hotkey_stop,
             on_cancel=self._on_hotkey_cancel,
+            on_undo=self._on_hotkey_undo,
         )
         try:
             self.hotkeys.start()
         except HotkeyUnavailable as exc:
             log.error("hotkey listener unavailable: %s", exc)
-            return 2
+            return EXIT_NO_HOTKEY
 
         self.tray.start()
         self._refresh_engines()
@@ -154,6 +168,44 @@ class OpenFlowApp:
             return qt_app.exec()
         finally:
             self.shutdown()
+
+    # -- undo --------------------------------------------------------------
+    def _on_hotkey_undo(self) -> None:
+        """Swap the last insertion for the raw transcript.
+
+        Bounded by UNDO_WINDOW_S because replace_last() works by sending
+        backspaces: it is only safe while the caret is still sitting where we
+        left it. After a few seconds the user has very likely typed, clicked,
+        or moved on, and those backspaces would eat their words instead of
+        ours. Refusing is the safe failure.
+        """
+        pending = self._last_insertion
+        if pending is None:
+            return
+        raw, cleaned, record_id, at = pending
+        if time.monotonic() - at > UNDO_WINDOW_S:
+            log.info("undo ignored: %.0fs since the insertion, too late to be safe",
+                     time.monotonic() - at)
+            self._flash_error("Too late to undo")
+            return
+        if raw.strip() == cleaned.strip():
+            log.info("undo ignored: cleanup changed nothing")
+            return
+
+        try:
+            replaced = self.injector.replace_last(raw)
+        except Exception as exc:
+            log.warning("undo failed: %s", exc)
+            self._flash_error("Undo failed")
+            return
+        if not replaced:
+            return
+
+        self._last_insertion = None
+        # The user rejecting our cleanup is the most honest label we ever get.
+        self.capture.reject(record_id)
+        log.info("undone: restored the raw transcript")
+        self._events.put(("flash", "undone"))
 
     def _ask_for_name(self) -> None:
         """First-run greeting prompt. Never fatal: a failure here must not
@@ -175,6 +227,23 @@ class OpenFlowApp:
         self.stt.warm()
         self._warm_llm()
         self._events.put(("engines", None))
+        self._check_for_updates()
+
+    def _check_for_updates(self) -> None:
+        """Runs on the warm-up thread, after the models -- an update notice is
+        never worth delaying the first dictation for."""
+        try:
+            from .updates import check_if_due
+
+            release = check_if_due(self.config)
+            if release is None:
+                return
+            if release.version == self.config.updates.skipped_version:
+                return
+            log.info("update available: %s", release.version)
+            self._events.put(("update", release))
+        except Exception as exc:
+            log.debug("update check failed: %s", exc)
 
     def _warm_llm(self) -> None:
         """Load the local model's weights before the first dictation needs
@@ -244,6 +313,45 @@ class OpenFlowApp:
             self.config.save()
             self._events.put(("engines", None))
             return
+        if key == "display_name":
+            from .ui.welcome import clean_name
+
+            self.config.ui.display_name = clean_name(value)
+            self.config.save()
+            self._events.put(("greeting", None))
+            return
+        if key == "updates.skipped_version":
+            self.config.updates.skipped_version = str(value)
+            self.config.save()
+            return
+        if key == "updates_enabled":
+            self.config.updates.check_on_startup = bool(value)
+            self.config.save()
+            return
+        if key == "profiles_enabled":
+            self.config.profiles.enabled = bool(value)
+            self.config.save()
+            return
+        if key == "capture_enabled":
+            self.config.capture.enabled = bool(value)
+            if not value:
+                # Turning it off deletes what was collected. Leaving recordings
+                # behind after someone opts out is not a defensible default.
+                removed = Capture.purge()
+                log.info("capture disabled; removed %d file(s)", removed)
+            self.config.save()
+            return
+        if key == "capture_audio":
+            self.config.capture.audio = bool(value)
+            self.config.save()
+            return
+        if key == "stt.language":
+            # "auto" is stored as an empty string: the engines treat a missing
+            # language as "detect", and this keeps one meaning per value.
+            self.config.stt.language = "" if value == "auto" else str(value)
+            self.config.save()
+            self._events.put(("engines", None))
+            return
         if key == "close_to_tray":
             self.config.ui.close_to_tray = bool(value)
         elif key == "duck_others":
@@ -252,6 +360,11 @@ class OpenFlowApp:
             self.config.log_transcripts = bool(value)
         elif key == "injection.method":
             self.config.injection.method = str(value)
+        else:
+            # A switch wired to a key nothing handles would look like it worked
+            # and silently do nothing. Say so instead of writing the config.
+            log.warning("no handler for setting %r; ignoring", key)
+            return
         self.config.save()
 
     def _set_mode(self, mode: str) -> None:
@@ -331,6 +444,9 @@ class OpenFlowApp:
     # -- hotkey callbacks (pynput thread; ducker lives here on purpose) ----
     def _on_hotkey_start(self) -> None:
         self.injector.remember_focus()
+        # Identify the target app now, while it still has focus. By the time
+        # the worker finishes, the foreground window may be ours.
+        self._target_app = foreground_process() if self.config.profiles.enabled else ""
         self.recorder.start()
         if self.config.audio.duck_others:
             self.ducker.duck()
@@ -390,8 +506,18 @@ class OpenFlowApp:
             self.window.set_transform_status(message, busy=False)
         elif kind == "rebound":
             self.window.capture_finished(payload)
+        elif kind == "flash":
+            # A short colored pulse on the pill. The overlay renders bars, not
+            # text, so the state colour is the whole message.
+            self.overlay.show_pill(str(payload))
+            self.overlay.set_state(str(payload))
+            threading.Timer(1.2, lambda: self._events.put(("hide", None))).start()
+        elif kind == "update":
+            self.window.show_update(payload)
         elif kind == "engines":
             self._refresh_engines()
+        elif kind == "greeting":
+            self.window.refresh_greeting()
         elif kind == "show_window":
             self.show_window()
         elif kind == "toggle_pause":
@@ -420,12 +546,15 @@ class OpenFlowApp:
 
         started = time.perf_counter()
         duration_s = len(audio) / rate
+        # Measure before conditioning: condition() normalizes to a fixed peak,
+        # after which every clip looks equally loud and the level tells you
+        # nothing about whether anyone actually spoke.
+        rms_before, peak_before = measure(audio)
         if is_silent(audio, rate):
             # A stray tap of the hotkey, or a dead microphone. Log the levels:
             # if this ever fires on real speech, the numbers say so immediately.
-            rms, peak = measure(audio)
             log.info("no signal (rms=%.6f peak=%.6f, %.1fs); discarding",
-                     rms, peak, duration_s)
+                     rms_before, peak_before, duration_s)
             self._events.put(("hide", None))
             return
         audio = condition(audio, rate)
@@ -440,8 +569,26 @@ class OpenFlowApp:
             self._events.put(("hide", None))
             return
 
+        # Whisper-family models answer silence with subtitle boilerplate --
+        # "Thank you.", "Thanks for watching!". Pasting that into someone's
+        # document is worse than pasting nothing.
+        if is_silence_hallucination(transcript.text, duration_s, rms_before):
+            log.info("discarding likely silence hallucination %r (%.1fs, rms=%.4f)",
+                     transcript.text.strip(), duration_s, rms_before)
+            self._events.put(("hide", None))
+            return
+
         result = self.cleaner.clean(transcript.text)
         final = self.personal.apply(result.text)
+
+        if self.config.profiles.enabled:
+            profile = profile_for(self._target_app, self.config.profiles.apps)
+            if profile is not DEFAULT:
+                shaped = apply_profile(final, profile)
+                if shaped != final:
+                    log.info("%s profile applied for %s", profile.name, self._target_app)
+                final = shaped
+
         self._events.put(("state", "injecting"))
         if self.window.scratch_mode:
             self._events.put(("scratch", final))
@@ -450,6 +597,20 @@ class OpenFlowApp:
         self._events.put(("hide", None))
 
         total_ms = (time.perf_counter() - started) * 1000
+
+        record_id = self.capture.record(
+            raw=transcript.text, cleaned=final,
+            stt_engine=transcript.engine, clean_engine=result.engine,
+            duration_s=duration_s, rms=rms_before, latency_ms=total_ms,
+            strategies=[r.strategy for r in result.retractions],
+            fillers_removed=result.fillers_removed,
+            repetitions_collapsed=result.repetitions_collapsed,
+            uncertain=result.uncertain,
+            audio=audio, sample_rate=rate,
+        )
+        # Held for the undo hotkey. The raw transcript is what we restore, so a
+        # bad cleanup is one keystroke away from the words actually spoken.
+        self._last_insertion = (transcript.text, final, record_id, time.monotonic())
         self.history.add(
             Entry(
                 at=time.time(),

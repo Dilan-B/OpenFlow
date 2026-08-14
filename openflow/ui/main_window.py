@@ -17,7 +17,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
-from ..config import Config
+from .. import __version__
+from ..config import CONFIG_DIR, Config
 from ..history import History
 from ..personalization import STYLES, Personalization
 from . import theme
@@ -65,6 +66,22 @@ TRANSFORMS = [
     ("formal", "Polish", "Improve clarity and register"),
     ("shorten", "Shorten", "Cut to the essentials"),
     ("bullets", "Bullets", "Restructure as a list"),
+]
+
+# The 25 languages Parakeet v3 covers, which is also the narrower of the two
+# backends -- Groq's Whisper handles more, so anything listed here works on
+# both. "auto" lets the model detect it, which is what v3 is built for.
+LANGUAGES = [
+    ("auto", "Detect automatically"),
+    ("en", "English"), ("bg", "Bulgarian"), ("hr", "Croatian"),
+    ("cs", "Czech"), ("da", "Danish"), ("nl", "Dutch"),
+    ("et", "Estonian"), ("fi", "Finnish"), ("fr", "French"),
+    ("de", "German"), ("el", "Greek"), ("hu", "Hungarian"),
+    ("it", "Italian"), ("lv", "Latvian"), ("lt", "Lithuanian"),
+    ("mt", "Maltese"), ("pl", "Polish"), ("pt", "Portuguese"),
+    ("ro", "Romanian"), ("ru", "Russian"), ("sk", "Slovak"),
+    ("sl", "Slovenian"), ("es", "Spanish"), ("sv", "Swedish"),
+    ("uk", "Ukrainian"),
 ]
 
 
@@ -488,7 +505,25 @@ class MainWindow(QMainWindow):
         layout = self._page_layout(holder)
         title = QLabel(f"Welcome back, {_first_name(self.config.ui.display_name)}")
         title.setObjectName("H1")
+        self._w["greeting"] = title
         layout.addWidget(title)
+
+        # Hidden until an update check finds something newer.
+        update_row = QHBoxLayout()
+        update_label = QLabel()
+        update_label.setObjectName("Sub")
+        update_button = QPushButton("Download")
+        update_button.setObjectName("Primary")
+        update_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        update_skip = QPushButton("Skip this one")
+        update_skip.setCursor(Qt.CursorShape.PointingHandCursor)
+        update_row.addWidget(update_label, 1)
+        update_row.addWidget(update_button)
+        update_row.addWidget(update_skip)
+        for widget in (update_label, update_button, update_skip):
+            widget.setVisible(False)
+        self._w["update_banner"] = (update_label, update_button, update_skip)
+        layout.addLayout(update_row)
 
         columns = QHBoxLayout()
         columns.setSpacing(18)
@@ -1173,6 +1208,16 @@ class MainWindow(QMainWindow):
                      "Shows your words in History. Off keeps only counts.",
                      "log_transcripts", self.config.log_transcripts)
         card.addWidget(_hairline())
+        self._switch(card, "Match the app I'm dictating into",
+                     "No trailing full stop in a terminal, straight quotes in a "
+                     "code editor.",
+                     "profiles_enabled", self.config.profiles.enabled)
+        card.addWidget(_hairline())
+        self._switch(card, "Check for updates",
+                     "One anonymous request to GitHub at startup. Never installs "
+                     "anything on its own.",
+                     "updates_enabled", self.config.updates.check_on_startup)
+        card.addWidget(_hairline())
 
         method_row = QHBoxLayout()
         method_label = QLabel("Insert text by")
@@ -1185,6 +1230,71 @@ class MainWindow(QMainWindow):
             lambda v: self.cb["setting"]("injection.method", v))
         method_row.addWidget(method)
         card.addLayout(method_row)
+        card.addWidget(_hairline())
+
+        language_row = QHBoxLayout()
+        language_row.addWidget(QLabel("Spoken language"))
+        language_row.addStretch()
+        language = QComboBox()
+        for code, label in LANGUAGES:
+            language.addItem(label, code)
+        index = language.findData(self.config.stt.language or "auto")
+        language.setCurrentIndex(index if index >= 0 else 0)
+        language.currentIndexChanged.connect(
+            lambda _i, box=language: self.cb["setting"]("stt.language", box.currentData()))
+        language_row.addWidget(language)
+        card.addLayout(language_row)
+        card.addWidget(_hairline())
+
+        name_row = QHBoxLayout()
+        name_col = QVBoxLayout()
+        name_col.setSpacing(1)
+        name_title = QLabel("Your name")
+        name_title.setStyleSheet("background: transparent; font-weight: 600;")
+        name_col.addWidget(name_title)
+        name_sub = QLabel("What the dictation page calls you.")
+        name_sub.setObjectName("Faint")
+        name_col.addWidget(name_sub)
+        name_row.addLayout(name_col, 1)
+        name_field = QLineEdit(self.config.ui.display_name)
+        name_field.setPlaceholderText(_account_name() or "there")
+        name_field.setMaximumWidth(200)
+        # editingFinished, not textChanged: writing the config on every
+        # keystroke would rewrite the file a dozen times per name.
+        name_field.editingFinished.connect(
+            lambda f=name_field: self.cb["setting"]("display_name", f.text()))
+        name_row.addWidget(name_field)
+        self._w["name_field"] = name_field
+        card.addLayout(name_row)
+
+        # Capture gets its own card. It is the only setting here that starts
+        # keeping a record of what you said, so it should not read as one more
+        # switch in a list.
+        capture_card = self._card(layout, margins=(20, 14, 20, 14))
+        capture_head = QLabel("Help improve the cleanup")
+        capture_head.setObjectName("H2")
+        capture_card.addWidget(capture_head)
+        capture_note = QLabel(
+            "Saves each dictation and whether you undid it, to "
+            f"{CONFIG_DIR / 'capture'}. Nothing is ever uploaded — this is a "
+            "local dataset for measuring whether the cleanup is getting better. "
+            "Turning it off deletes everything it collected."
+        )
+        capture_note.setObjectName("Faint")
+        capture_note.setWordWrap(True)
+        capture_card.addWidget(capture_note)
+        stats = self._capture_stats_text()
+        stats_label = QLabel(stats)
+        stats_label.setObjectName("Faint")
+        self._w["capture_stats"] = stats_label
+        capture_card.addWidget(stats_label)
+        self._switch(capture_card, "Save dictations for evaluation",
+                     "Text, timings, and which cleanup rules fired.",
+                     "capture_enabled", self.config.capture.enabled)
+        capture_card.addWidget(_hairline())
+        self._switch(capture_card, "Include the audio",
+                     "Also keeps the recording. A bigger ask — separate on purpose.",
+                     "capture_audio", self.config.capture.audio)
 
         footer = QHBoxLayout()
         pause = QPushButton("Pause dictation")
@@ -1194,6 +1304,12 @@ class MainWindow(QMainWindow):
         open_config = QPushButton("Open config folder")
         open_config.clicked.connect(self._open_config_dir)
         footer.addWidget(open_config)
+        diagnostics = QPushButton("Copy diagnostics")
+        diagnostics.setToolTip(
+            "Copy version, backend status, and recent log lines to the clipboard.")
+        diagnostics.clicked.connect(self._copy_diagnostics)
+        self._w["diagnostics_button"] = diagnostics
+        footer.addWidget(diagnostics)
         footer.addStretch()
         quit_button = QPushButton("Quit OpenFlow")
         quit_button.setObjectName("Danger")
@@ -1237,6 +1353,65 @@ class MainWindow(QMainWindow):
         from PySide6.QtGui import QGuiApplication as Gui
 
         Gui.clipboard().setText(text)
+
+    def _capture_stats_text(self) -> str:
+        from ..capture import Capture
+
+        try:
+            stats = Capture.stats()
+        except Exception:
+            return ""
+        if not stats["total"]:
+            return "Nothing collected yet."
+        return (f"{stats['total']} dictations kept — {stats['rejected']} you undid, "
+                f"{stats['eval']} held back for evaluation, "
+                f"{stats['audio']} with audio.")
+
+    def show_update(self, release) -> None:
+        """A quiet banner on the dictation page. Not a modal: someone who
+        pressed the hotkey wants to dictate, not to read release notes."""
+        banner = self._w.get("update_banner")
+        if banner is None:
+            return
+        label, button, skip = banner
+        label.setText(f"OpenFlow {release.version} is available "
+                      f"(you have {__version__}).")
+        button.clicked.connect(lambda: self._open_url(release.url))
+        skip.clicked.connect(lambda: self._skip_update(release.version))
+        for widget in banner:
+            widget.setVisible(True)
+
+    def _skip_update(self, version: str) -> None:
+        self.cb["setting"]("updates.skipped_version", version)
+        for widget in self._w.get("update_banner", ()):
+            widget.setVisible(False)
+
+    def _open_url(self, url: str) -> None:
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+
+        QDesktopServices.openUrl(QUrl(url))
+
+    def refresh_greeting(self) -> None:
+        """Re-render the dictation page heading after the name changes, so the
+        Settings field takes effect without a restart."""
+        label = self._w.get("greeting")
+        if label is not None:
+            label.setText(f"Welcome back, {_first_name(self.config.ui.display_name)}")
+
+    def _copy_diagnostics(self) -> None:
+        from ..diagnostics import collect
+
+        button = self._w.get("diagnostics_button")
+        try:
+            self._copy(collect(self.config))
+            message = "Copied — paste it into a bug report"
+        except Exception as exc:            # never leave the user with nothing
+            self._copy(f"OpenFlow diagnostics failed to collect: {exc!r}")
+            message = "Collected with errors — pasted what we had"
+        if button is not None:
+            button.setText(message)
+            QTimer.singleShot(2500, lambda: button.setText("Copy diagnostics"))
 
     def _open_config_dir(self) -> None:
         from ..config import CONFIG_DIR

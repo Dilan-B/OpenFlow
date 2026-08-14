@@ -33,17 +33,21 @@ class HotkeyListener:
         on_start: Callable[[], None],
         on_stop: Callable[[], None],
         on_cancel: Callable[[], None],
+        on_undo: Callable[[], None] | None = None,
     ) -> None:
         self.cfg = config
         self.on_start = on_start
         self.on_stop = on_stop
         self.on_cancel = on_cancel
+        self.on_undo = on_undo
 
         self._listener = None
         self._active = False          # combo currently satisfied
         self._recording = False
         self._pressed: set = set()
         self._combo: frozenset = frozenset()
+        self._undo_combo: frozenset = frozenset()
+        self._undo_active = False
         self._cancel_key = None
         self._last_edge = 0.0
         self._lock = threading.Lock()
@@ -65,6 +69,16 @@ class HotkeyListener:
         if self.cfg.cancel:
             parsed = keyboard.HotKey.parse(self._normalize(self.cfg.cancel))
             self._cancel_key = parsed[0] if len(parsed) == 1 else None
+        if self.cfg.undo:
+            try:
+                self._undo_combo = frozenset(
+                    keyboard.HotKey.parse(self._normalize(self.cfg.undo))
+                )
+            except ValueError as exc:
+                # A bad combo in the config must not take the hotkey down with
+                # it -- dictation matters more than undo.
+                log.warning("could not parse undo combo %r: %s", self.cfg.undo, exc)
+                self._undo_combo = frozenset()
 
         self._listener = keyboard.Listener(
             on_press=self._on_press, on_release=self._on_release, suppress=False
@@ -150,6 +164,17 @@ class HotkeyListener:
             return
 
         self._pressed.add(key)
+
+        # Undo is checked before the dictation trigger and only when we are not
+        # recording, so a combo that shares modifiers cannot steal a dictation.
+        if (self.on_undo is not None and self._undo_combo
+                and not self._recording
+                and self._undo_combo.issubset(self._pressed)):
+            if not self._undo_active and self._debounced():
+                self._undo_active = True
+                self._safely(self.on_undo)
+            return
+
         if not self._combo.issubset(self._pressed) or self._active:
             return
         if not self._debounced():
@@ -179,6 +204,8 @@ class HotkeyListener:
             return
 
         self._pressed.discard(key)
+        if self._undo_combo and not self._undo_combo.issubset(self._pressed):
+            self._undo_active = False
         if not self._combo.issubset(self._pressed):
             self._active = False
             if self.cfg.mode == "push_to_talk" and self._recording:

@@ -30,6 +30,8 @@ class Injector:
         self.cfg = config
         self._controller = None
         self._saved_window = None
+        # What we last put into another app, so undo knows how much to remove.
+        self._last_injected = ""
 
     def _keyboard(self):
         if self._controller is None:
@@ -66,6 +68,7 @@ class Injector:
         if not text:
             return
         self.restore_focus()
+        self._last_injected = text
         if self.cfg.method == "paste":
             try:
                 self._paste(text)
@@ -73,6 +76,37 @@ class Injector:
             except Exception as exc:
                 log.warning("paste injection failed (%s); typing instead", exc)
         self._type(text)
+
+    def replace_last(self, text: str) -> bool:
+        """Swap the previous insertion for ``text``.
+
+        Deletes exactly as many characters as we inserted and types the
+        replacement. This is only correct while the caret is still where we
+        left it, which is why the caller gates it on a short time window --
+        if the user has typed, clicked, or switched apps since, the backspaces
+        would eat their work instead of ours.
+        """
+        previous = getattr(self, "_last_injected", "")
+        if not previous:
+            return False
+
+        from pynput.keyboard import Key
+
+        self.restore_focus()
+        keyboard = self._keyboard()
+        for _ in range(len(previous)):
+            keyboard.press(Key.backspace)
+            keyboard.release(Key.backspace)
+        self._last_injected = text
+        if text:
+            if self.cfg.method == "paste":
+                try:
+                    self._paste(text)
+                    return True
+                except Exception as exc:
+                    log.warning("paste failed during undo (%s); typing instead", exc)
+            self._type(text)
+        return True
 
     def _paste(self, text: str) -> None:
         import pyperclip

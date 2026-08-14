@@ -186,11 +186,39 @@ Four strategies, tried in order, with a deliberate bail-out:
 | re-anchor | replacement repeats the opening of the retracted clause | `meet tuesday at 5, or actually, meet friday at 3` → `meet friday at 3` |
 | restart | replacement opens a fresh independent clause | `ship the beta, actually, let's hold it` → `let's hold it` |
 | slot-patch | replacement is a fragment; only matching slots are overwritten | `Order 12 units, or actually 20` → `Order 20 units` |
-| pivot-only | ambiguous — delete the pivot phrase, keep both sides | `passes locally, or actually in staging too` |
+| keep-both | ambiguous — delete the pivot phrase, keep both sides | `passes locally, or actually in staging too` |
 
 The last row is the point: when the intent is unclear the tool leaves your words
 alone. A dictation tool that occasionally deletes a clause you meant to keep is
 worse than one that occasionally leaves an extra one.
+
+`keep-both` is also the trigger for the AI pass. On ordinary dictation the rules
+output and every model's output are identical (see [Speed decisions](#speed-decisions)),
+so calling a model is pure latency; it is spent only where the deterministic
+pass admitted it was guessing. Set `llm.only_when_uncertain` to `false` to call
+it on everything.
+
+### Stutters and repeated phrases
+
+Speech repeats in ways writing does not, and the ASR transcribes all of it:
+
+| Input | Output |
+|---|---|
+| `the the the deploy goes out at noon` | `The deploy goes out at noon.` |
+| `can we can we meet on Friday` | `Can we meet on Friday.` |
+
+Adjacent repeats only, with an allowlist for the doublings that are real English
+— `he had had enough`, `I think that that is wrong`, `it was very very slow` all
+survive untouched. A comma or full stop between the copies means you said it
+twice on purpose, so `no, no, keep it` is left alone.
+
+### Silence hallucinations
+
+Whisper-family models were trained on subtitle corpora, so silence makes them
+emit what subtitle files are full of — `Thank you.`, `Thanks for watching!`, a
+translator credit. A transcript that is *nothing but* one of those stock phrases,
+from a clip too short or too quiet to have contained it, is discarded instead of
+pasted. A real "thank you" that was long and loud enough goes through normally.
 
 ### Built-in autofixes (no model, ~0.2 ms)
 
@@ -334,6 +362,63 @@ recommended changes (Parakeet-via-ONNX as the local backend, Moonshine for
 short utterances, corrected Groq quota numbers, and a transcript-containment
 guard against LLM hallucination).
 
+## Undo, profiles, and the rest
+
+**Undo (Ctrl+Shift+Z).** Puts the raw transcript back when the cleanup got it
+wrong. Available for 15 seconds after an insertion — it works by sending
+backspaces, so it is only safe while the caret has not moved; after that it
+refuses rather than risk eating what you typed next.
+
+**Per-app profiles.** The right output depends on where it lands. A terminal
+gets no trailing full stop and no leading capital (`Git status.` → `git status`),
+a code editor also gets straight quotes, a chat window drops the full stop and
+keeps the capital. Everything else is prose, unchanged. Add your own mappings
+under `profiles.apps` in the config.
+
+**Spoken language.** Parakeet v3 covers 25 languages with automatic detection.
+Settings → Spoken language, or `stt.language` (empty means detect).
+
+**Update check.** One anonymous request to GitHub at startup, at most once a
+day. It shows a banner and a link — it never installs anything on its own, and
+it is one switch away from off.
+
+**Copy diagnostics.** Settings → Copy diagnostics puts version, backend status,
+execution providers, dependency versions, and the last 60 log lines on the
+clipboard, with credential-bearing lines redacted. In a packaged build the log
+is the only evidence a failure happened, and nobody finds it on their own.
+
+**Eval capture (off by default).** Saves each dictation and whether you undid it
+to `~/.openflow/capture/`, to build a real evaluation set — see
+[the note on the corpus](#the-stem-removal-harness). Nothing is ever uploaded.
+Audio is a separate opt-in, and switching capture off deletes what it collected.
+
+## Verifying a packaged build
+
+The startup-shortcut bug that shipped in 1.0.0 was invisible from a source
+checkout: it only existed once `__file__` moved inside `_internal/` and
+`sys.executable` stopped being an interpreter. Two things now catch that class
+of failure:
+
+```bash
+python -m openflow --self-test
+```
+
+Checks that the launcher this build would write is one it can actually parse,
+that the working directory and icon resolve, that stdout and stderr are
+writable, and that every module PyInstaller had to collect imports.
+
+```bash
+pwsh scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow/OpenFlow.exe
+```
+
+Runs the above against the built exe, plus the real startup arguments, and pins
+the historical break so it cannot come back quietly. CI runs it on every push
+and the release workflow will not publish an installer that fails it.
+
+Exit codes are distinct on purpose: `2` is a usage error and *only* a usage
+error, `3` is no microphone, `4` is no hotkey, `5` is a failed self-test.
+Conflating the first two is what let the broken shortcut go unnoticed.
+
 ## Known gaps
 
 - CapsLock as a trigger will still toggle caps state; suppressing that needs a
@@ -350,3 +435,18 @@ guard against LLM hallucination).
   say passes the check. Reordering is a far less damaging failure than
   substitution, and the length guard bounds it.
 - The overlay shows state, not live text — no partial-transcript preview.
+- **The golden corpus scores 100%, and that number is weaker than it looks.**
+  29 cases, hand-written alongside the implementation they validate, every one
+  text-in / text-out. The cleaner never sees a real ASR error in testing, and
+  ASR output is the only input it ever gets in production. Eval capture exists
+  to close this; until there is held-out data from real dictation, treat the
+  score as a regression guard rather than as evidence of quality.
+- GPU inference is selectable but not recommended — DirectML measured *slower*
+  than CPU for int8 Parakeet, see [the research addendum](docs/research-2026-08.md).
+  CUDA on a real NVIDIA stack is untested.
+- The installer is unsigned, so SmartScreen shows an "unrecognized app" warning.
+  Signing needs a purchased certificate; the release workflow will sign
+  automatically once `CODE_SIGN_PFX` and `CODE_SIGN_PASSWORD` secrets exist.
+- Undo is time-bounded and backspace-based, so it cannot restore an insertion
+  after the caret has moved. A proper undo would need per-app text-object
+  access that no cross-platform API offers.
