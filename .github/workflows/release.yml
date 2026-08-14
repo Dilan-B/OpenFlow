@@ -65,29 +65,10 @@ jobs:
           & $iscc /DMyAppVersion=${{ steps.version.outputs.version }} installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
 
-      # Signing is skipped unless the secrets exist. An unsigned installer trips
-      # SmartScreen's "unrecognized app" wall, which is a real adoption tax for
-      # a tool that asks for the microphone and a global keyboard hook -- but a
-      # certificate has to be bought and is tied to an identity, so it cannot be
-      # set up from here. Add CODE_SIGN_PFX (base64 of the .pfx) and
-      # CODE_SIGN_PASSWORD as repository secrets to turn this on.
-      - name: Sign installer
-        if: ${{ env.CODE_SIGN_PFX != '' }}
-        env:
-          CODE_SIGN_PFX: ${{ secrets.CODE_SIGN_PFX }}
-          CODE_SIGN_PASSWORD: ${{ secrets.CODE_SIGN_PASSWORD }}
-        shell: pwsh
-        run: |
-          $pfx = "$env:RUNNER_TEMP\cert.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODE_SIGN_PFX))
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse `
-            -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } |
-            Select-Object -First 1 -ExpandProperty FullName
-          & $signtool sign /f $pfx /p $env:CODE_SIGN_PASSWORD /fd SHA256 `
-            /tr http://timestamp.digicert.com /td SHA256 dist_installer/OpenFlowSetup.exe
-          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
-          Remove-Item $pfx -Force
-
+      # The installer ships unsigned -- a code signing certificate is a paid,
+      # identity-verified purchase, and this project isn't buying one. That
+      # means SmartScreen shows an "unrecognized app" wall on download; the
+      # README's Known gaps section says so.
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

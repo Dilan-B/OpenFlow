@@ -444,9 +444,10 @@ Conflating the first two is what let the broken shortcut go unnoticed.
 - GPU inference is selectable but not recommended — DirectML measured *slower*
   than CPU for int8 Parakeet, see [the research addendum](docs/research-2026-08.md).
   CUDA on a real NVIDIA stack is untested.
-- The installer is unsigned, so SmartScreen shows an "unrecognized app" warning.
-  Signing needs a purchased certificate; the release workflow will sign
-  automatically once `CODE_SIGN_PFX` and `CODE_SIGN_PASSWORD` secrets exist.
+- The installer is unsigned, so SmartScreen shows an "unrecognized app" warning
+  on download. Not planned — a code signing certificate is a paid,
+  identity-verified purchase, and this project isn't buying one. Click "More
+  info" → "Run anyway" to proceed.
 - Undo is time-bounded and backspace-based, so it cannot restore an insertion
   after the caret has moved. A proper undo would need per-app text-object
   access that no cross-platform API offers.
