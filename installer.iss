@@ -3,7 +3,10 @@
 ; from dist\OpenFlow and creates Start Menu / Desktop shortcuts.
 
 #define MyAppName "OpenFlow"
-#define MyAppVersion "1.0.0"
+; CI overrides this with /DMyAppVersion=x.y.z from the release tag.
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "OpenFlow"
 #define MyAppExeName "OpenFlow.exe"
 

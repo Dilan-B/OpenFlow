@@ -1,6 +1,6 @@
 [project]
 name = "openflow"
-version = "0.1.0"
+dynamic = ["version"]
 description = "System-wide voice-to-text with LLM transcript cleanup"
 requires-python = ">=3.11"
 dependencies = [
@@ -24,6 +24,9 @@ openflow = "openflow.__main__:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "openflow.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["openflow*"]

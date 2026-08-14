@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run test suite
+        env:
+          # No display on a runner; Qt widgets still construct offscreen.
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: Score the cleanup corpus
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m tests.harness
+
+      - name: Self-test from source
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m openflow --self-test
+
+  package:
+    name: package + smoke test
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: pyinstaller OpenFlow.spec --noconfirm --clean
+
+      # The point of this job. These failures are invisible from a source
+      # checkout: they only exist once __file__ moves inside _internal/ and
+      # sys.executable stops being an interpreter.
+      - name: Smoke-test the frozen build
+        shell: pwsh
+        run: ./scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow/OpenFlow.exe
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenFlowSetup
+          path: dist_installer/OpenFlowSetup.exe
+          if-no-files-found: error
+          retention-days: 14
