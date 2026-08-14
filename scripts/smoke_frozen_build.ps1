@@ -33,8 +33,17 @@ function Invoke-Exe {
     $out = New-TemporaryFile
     $err = New-TemporaryFile
     try {
-        $p = Start-Process -FilePath $ExePath -ArgumentList $Arguments -PassThru `
+        # Quote anything with a space, or Start-Process splits it into separate
+        # arguments and `--clean "hello there"` arrives as two unknown ones.
+        $quoted = $Arguments | ForEach-Object {
+            if ($_ -match '\s' -and $_ -notmatch '^".*"$') { '"' + $_ + '"' } else { $_ }
+        }
+        $p = Start-Process -FilePath $ExePath -ArgumentList $quoted -PassThru `
             -RedirectStandardOutput $out -RedirectStandardError $err -NoNewWindow
+        # Touching Handle caches it in the .NET object. Without this, ExitCode
+        # reads back as $null once the process is gone -- a long-standing
+        # Start-Process -PassThru trap, and it silently fails every check.
+        $null = $p.Handle
         $exited = $p.WaitForExit($WaitSeconds * 1000)
         if ($exited) {
             # The timed overload can leave ExitCode stale and async output
@@ -80,8 +89,15 @@ Write-Host "smoke-testing $ExePath`n"
 # 1. The build's own view of whether it can launch itself. Covers launch target,
 #    working directory, icon, std handles, and every module PyInstaller had to
 #    collect.
-$selfTest = Assert-ExitCode -Label "--self-test" -Arguments @("--self-test") -Expected 0
+$selfTest = Invoke-Exe -Arguments @("--self-test")
 if ($selfTest.Stdout) { $selfTest.Stdout.TrimEnd() -split "`r?`n" | ForEach-Object { Write-Host "        $_" } }
+if ($selfTest.Exited -and $selfTest.Code -eq 0) {
+    Write-Host "  PASS  --self-test (exit 0)" -ForegroundColor Green
+} else {
+    Write-Host "  FAIL  --self-test (exit $($selfTest.Code))" -ForegroundColor Red
+    if ($selfTest.Stderr) { Write-Host "        stderr: $($selfTest.Stderr.Trim())" }
+    $failures += "--self-test"
+}
 
 # 2. The exact arguments the Startup shortcut carries, launched the way Windows
 #    launches them at sign-in. Three outcomes, and only one is a failure:
