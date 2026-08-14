@@ -178,6 +178,45 @@ coverage. That is the single clearest signal from this scan.
 
 ---
 
+## Addendum 2 — GPU inference does not help this workload
+
+Tested because it looked like free speed: the machine has an RTX 4070 Ti while
+`requirements.txt` pins `onnx-asr[cpu,hub]`, so inference was running on CPU.
+The expectation was a large win. It is not there.
+
+Measured with `scripts/bench_providers.py`, parakeet-tdt-0.6b-v3 int8, 9.9 s of
+synthesized speech, median of 5 runs:
+
+| Provider | Runtime wheel | Transcribe |
+|---|---|---|
+| DmlExecutionProvider | onnxruntime-directml 1.24.4 | 3,258 ms |
+| CPUExecutionProvider | onnxruntime-directml 1.24.4 | 2,609 ms |
+| CPUExecutionProvider | onnxruntime 1.28.0 | 3,172 ms |
+
+DirectML is slower than the CPU provider in the same wheel, and the run-to-run
+spread (min 2,054, max 4,413 on CPU) is wide enough that the honest summary is
+**no measurable benefit**. Two structural reasons, neither of them a tuning
+problem:
+
+* A TDT transducer decodes one step per emitted token, sequentially. That is
+  bound by per-op dispatch latency, not arithmetic throughput — the only thing
+  a GPU would win.
+* int8 weights are the CPU's home turf (VNNI). A GPU path may dequantize or
+  fall back per-op, paying a copy at every boundary.
+
+Consequences, now implemented in `stt/providers.py`:
+
+* `stt.device` defaults to `auto`, and **auto means CPU**. A GPU has to be
+  named explicitly. Silently switching to an unmeasured path would have been a
+  regression dressed as an optimization.
+* Provider selection, fallback, and the benchmark script are still worth
+  having: CUDA on a proper NVIDIA stack is untested here, and anyone can now
+  measure their own machine in one command.
+
+Not tested: fp32 on GPU. fp32 is a 2.3 GB download, which the main body of this
+document already rejects for a hotkey tool, so a GPU win there would not change
+the default anyway.
+
 ## Sources
 
 - [onnx-asr — GitHub](https://github.com/istupakov/onnx-asr) · [PyPI](https://pypi.org/project/onnx-asr/)
