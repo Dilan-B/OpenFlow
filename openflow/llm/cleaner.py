@@ -50,6 +50,15 @@ class LLMCleaner:
             result.latency_ms = (time.perf_counter() - started) * 1000
             return result
 
+        # Selective invocation: on ordinary dictation the rules pass already
+        # produces what every model produces, so calling one is pure latency.
+        # Spend it only where the deterministic pass admitted it was guessing.
+        if self.config.llm.only_when_uncertain and prepass is not None \
+                and not prepass.uncertain:
+            log.debug("rules pass was confident; skipping the LLM")
+            prepass.latency_ms = (time.perf_counter() - started) * 1000
+            return prepass
+
         for name in self.chain:
             if name == "rules":
                 result = prepass or self.rules.clean(text)
@@ -87,6 +96,7 @@ class LLMCleaner:
                 raw=raw,
                 retractions=prepass.retractions if prepass else [],
                 fillers_removed=prepass.fillers_removed if prepass else [],
+                repetitions_collapsed=prepass.repetitions_collapsed if prepass else [],
                 engine=name,
                 latency_ms=(time.perf_counter() - started) * 1000,
             )

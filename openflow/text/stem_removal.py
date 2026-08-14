@@ -26,7 +26,10 @@ decide how much of HEAD the speaker actually threw away:
   D. Bail out   -- ambiguous: keep both sides and drop just the pivot phrase.
 
 Rule D is the safety net: when in doubt we prefer a slightly verbose
-transcript over deleting words the user meant to keep.
+transcript over deleting words the user meant to keep. It reports strategy
+"keep-both", distinct from the "pivot-only" case where one side was empty and
+there was nothing to be ambiguous about -- callers use that difference to tell
+"I was unsure" from "there was nothing to do".
 """
 
 from __future__ import annotations
@@ -356,7 +359,12 @@ def remove_false_starts(text: str) -> tuple[str, list[Retraction]]:
                 strategy = "slot-patch"
                 dropped = head[len(prefix):len(head) - len(suffix)]
             else:
-                kept, strategy, dropped = _join(head, tail, break_before), "pivot-only", []
+                # Rule D. Both sides carry content and nothing told us which
+                # the speaker meant, so keep everything and drop only the
+                # pivot. Named apart from "pivot-only" because this is the
+                # ambiguous case -- CleanResult.uncertain keys off it to
+                # decide whether an LLM second opinion is worth the latency.
+                kept, strategy, dropped = _join(head, tail, break_before), "keep-both", []
 
         retractions.append(
             Retraction(pivot=phrase, removed=detokenize(dropped), strategy=strategy)

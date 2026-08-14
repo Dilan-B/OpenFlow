@@ -13,6 +13,7 @@ from typing import Protocol, runtime_checkable
 from .autofix import apply_symbol_fixes, apply_word_fixes
 from .fillers import strip_fillers
 from .punctuation import fix_punctuation, normalize_whitespace
+from .repetitions import collapse_repetitions
 from .spoken import apply_spoken_punctuation
 from .stem_removal import Retraction, remove_false_starts
 
@@ -23,9 +24,21 @@ class CleanResult:
     raw: str
     retractions: list[Retraction] = field(default_factory=list)
     fillers_removed: list[str] = field(default_factory=list)
+    repetitions_collapsed: list[str] = field(default_factory=list)
     autofixes: int = 0
     engine: str = "rules"
     latency_ms: float = 0.0
+
+    @property
+    def uncertain(self) -> bool:
+        """True when the deterministic pass hit something it could not resolve
+        cleanly, so a second opinion from the LLM is worth its latency.
+
+        Strategy "keep-both" is stem_removal's rule D -- it found a retraction
+        pivot but could not tell how much the speaker threw away, so it kept
+        everything. That is the one case where a model reliably does better.
+        """
+        return any(r.strategy == "keep-both" for r in self.retractions)
 
 
 @runtime_checkable
@@ -62,16 +75,22 @@ class RuleBasedCleaner:
 
         retractions: list[Retraction] = []
         fillers: list[str] = []
+        repetitions: list[str] = []
         segments: list[str] = []
         for segment in text.split("\n"):
             if not segment.strip():
                 segments.append("")
                 continue
-            cleaned, segment_retractions = remove_false_starts(segment)
+            # Stutters first: "can we can we meet up on Tuesday, or actually
+            # Friday" should reach the pivot logic as one clean clause, not as
+            # a doubled one that looks like a re-anchor.
+            cleaned, segment_repetitions = collapse_repetitions(segment)
+            cleaned, segment_retractions = remove_false_starts(cleaned)
             cleaned, segment_fillers = strip_fillers(cleaned)
             cleaned = fix_punctuation(cleaned, terminal=self.terminal_punctuation)
             retractions.extend(segment_retractions)
             fillers.extend(segment_fillers)
+            repetitions.extend(segment_repetitions)
             segments.append(cleaned)
 
         # Symbol repairs run last: they introduce '.', '@' and ':' , which the
@@ -83,6 +102,7 @@ class RuleBasedCleaner:
             raw=raw,
             retractions=retractions,
             fillers_removed=fillers,
+            repetitions_collapsed=repetitions,
             autofixes=autofixes + symbol_fixes,
             engine=self.name,
         )
