@@ -65,6 +65,7 @@ class OpenFlowApp:
         self.tray = None
         self.single_instance = None
         self.paused = False
+        self._hotkeys_reported_dead = False
         self._events: queue.Queue = queue.Queue()
         self._jobs: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -199,6 +200,7 @@ class OpenFlowApp:
 
     def toggle_pause(self) -> None:
         self.paused = not self.paused
+        log.info("dictation %s", "paused" if self.paused else "resumed")
         if self.hotkeys:
             self.hotkeys.paused = self.paused
         if self.paused:
@@ -231,7 +233,27 @@ class OpenFlowApp:
             self.config.log_transcripts = bool(value)
         elif key == "injection.method":
             self.config.injection.method = str(value)
+        elif key == "audio.input_device":
+            self._set_input_device(value)
+            return
         self.config.save()
+
+    def _set_input_device(self, value) -> None:
+        """Swap microphones live. The UI hands back None for System default."""
+        from .audio.devices import describe
+
+        device = None if value in (None, "") else int(value)
+        try:
+            self.recorder.reopen(device)
+        except Exception as exc:
+            log.error("could not open %s: %s", describe(device), exc)
+            self.window.set_mic_status(f"Could not open that microphone: {exc}", ok=False)
+            self.window.select_input_device(self.config.audio.input_device)
+            return
+        self.config.audio.input_device = device
+        self.config.save()
+        log.info("input device: %s", describe(device))
+        self.window.set_mic_status(f"Listening on {describe(device)}.", ok=True)
 
     def _set_mode(self, mode: str) -> None:
         self.config.hotkey.mode = mode
@@ -337,12 +359,28 @@ class OpenFlowApp:
                 break
             self._handle(kind, payload)
 
+        self._check_hotkeys_alive()
+
+        if self.window.isVisible():
+            self.window.push_input_level(self.recorder.level)
+
         if self.overlay.state == "recording":
             self.overlay.push_level(self.recorder.level)
             if self.recorder.over_limit:
                 log.warning("recording hit max_seconds; finishing early")
                 self._on_hotkey_stop()
         self.overlay.tick()
+
+    def _check_hotkeys_alive(self) -> None:
+        """A dead pynput thread is indistinguishable from an idle app: no
+        error, no keys. Say so once, rather than letting it look healthy."""
+        if self._hotkeys_reported_dead or self.hotkeys is None:
+            return
+        if self.hotkeys.alive:
+            return
+        self._hotkeys_reported_dead = True
+        log.error("hotkey listener stopped; dictation will not respond until restart")
+        self.window.set_state("error")
 
     def _handle(self, kind: str, payload) -> None:
         if kind == "show":

@@ -17,7 +17,7 @@ import os
 import sys
 import time
 
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRect, QRectF
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
@@ -138,6 +138,42 @@ def _hairline() -> QFrame:
 # ---------------------------------------------------------------------------
 # Painted widgets
 # ---------------------------------------------------------------------------
+
+class LevelMeter(QWidget):
+    """A live input meter. Its job is to answer one question -- "is this
+    microphone hearing me?" -- before the user commits to a device and
+    discovers the answer mid-sentence."""
+
+    def __init__(self, accent: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._accent = accent
+        self._level = 0.0
+        self.setFixedHeight(6)
+        self.setMinimumWidth(120)
+
+    def set_level(self, level: float) -> None:
+        level = max(0.0, min(1.0, float(level)))
+        if abs(level - self._level) < 0.005:
+            return
+        self._level = level
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect()
+        radius = rect.height() / 2
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 28))
+        painter.drawRoundedRect(rect, radius, radius)
+
+        if self._level > 0.001:
+            filled = QRect(rect)
+            filled.setWidth(max(int(rect.width() * self._level), rect.height()))
+            painter.setBrush(QColor(self._accent))
+            painter.drawRoundedRect(filled, radius, radius)
+
 
 class BarsChart(QWidget):
     """Words per day, teal."""
@@ -301,6 +337,9 @@ class MainWindow(QMainWindow):
         self.state = "ready"
         self.scratch_mode = False
         self._w: dict = {}
+        # Set while we move the device combo ourselves, so programmatic
+        # selection does not read as a user choice and reopen the stream.
+        self._muting_device_signal = False
         self._built_pages: set[str] = set()
         self._title_bar_blended = False
 
@@ -1166,6 +1205,8 @@ class MainWindow(QMainWindow):
                      "log_transcripts", self.config.log_transcripts)
         card.addWidget(_hairline())
 
+        self._build_microphone_card(layout)
+
         method_row = QHBoxLayout()
         method_label = QLabel("Insert text by")
         method_row.addWidget(method_label)
@@ -1194,6 +1235,87 @@ class MainWindow(QMainWindow):
         layout.addSpacing(4)
         layout.addLayout(footer)
         layout.addStretch()
+
+    def _build_microphone_card(self, layout) -> None:
+        """Device picker plus a live meter. Without the meter a wrong choice is
+        invisible until you try to dictate and get nothing back."""
+        from ..audio.devices import describe, list_input_devices
+
+        card = self._card(layout, margins=(20, 14, 20, 14))
+
+        row = QHBoxLayout()
+        text_col = QVBoxLayout()
+        text_col.setSpacing(1)
+        head = QLabel("Microphone")
+        head.setStyleSheet("background: transparent; font-weight: 600;")
+        text_col.addWidget(head)
+        desc = QLabel("Speak now — the bar moves if this device hears you.")
+        desc.setObjectName("Faint")
+        text_col.addWidget(desc)
+        row.addLayout(text_col, 1)
+
+        combo = QComboBox()
+        combo.setMinimumWidth(240)
+        combo.addItem(describe(None), None)
+        try:
+            devices = list_input_devices()
+        except Exception as exc:  # pragma: no cover - depends on host audio
+            log.warning("could not list input devices: %s", exc)
+            devices = []
+        for device in devices:
+            combo.addItem(device.name, device.index)
+        row.addWidget(combo)
+        card.addLayout(row)
+        self._w["mic_combo"] = combo
+
+        meter = LevelMeter(self.config.ui.accent)
+        card.addSpacing(8)
+        card.addWidget(meter)
+        self._w["mic_meter"] = meter
+
+        status = QLabel("")
+        status.setObjectName("Faint")
+        status.setWordWrap(True)
+        card.addWidget(status)
+        self._w["mic_status"] = status
+
+        self.select_input_device(self.config.audio.input_device)
+        combo.currentIndexChanged.connect(self._on_input_device_changed)
+
+    def _on_input_device_changed(self, _index: int) -> None:
+        combo = self._w.get("mic_combo")
+        if combo is None or self._muting_device_signal:
+            return
+        self.cb["setting"]("audio.input_device", combo.currentData())
+
+    def select_input_device(self, index: int | None) -> None:
+        """Point the combo at a device without re-triggering the change hook --
+        used on load, and to snap back when a device refuses to open."""
+        combo = self._w.get("mic_combo")
+        if combo is None:
+            return
+        target = combo.findData(index)
+        if target < 0:
+            target = 0
+        self._muting_device_signal = True
+        try:
+            combo.setCurrentIndex(target)
+        finally:
+            self._muting_device_signal = False
+
+    def push_input_level(self, level: float) -> None:
+        meter = self._w.get("mic_meter")
+        if meter is not None:
+            meter.set_level(level)
+
+    def set_mic_status(self, text: str, ok: bool = True) -> None:
+        status = self._w.get("mic_status")
+        if status is None:
+            return
+        status.setText(text)
+        status.setObjectName("Faint" if ok else "Danger")
+        status.style().unpolish(status)
+        status.style().polish(status)
 
     def _switch(self, layout, title: str, subtitle: str, key: str, initial: bool) -> None:
         row = QHBoxLayout()

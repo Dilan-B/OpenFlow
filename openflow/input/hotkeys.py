@@ -73,6 +73,14 @@ class HotkeyListener:
         self._listener.start()
         log.info("hotkey listening: %s (%s)", self.cfg.trigger, self.cfg.mode)
 
+    @property
+    def alive(self) -> bool:
+        """Whether pynput's thread is still listening. It can stop on its own
+        -- an exception inside the hook takes the thread down and the hotkey
+        with it, leaving an app that looks healthy but answers no keys."""
+        listener = self._listener
+        return bool(listener is not None and listener.running)
+
     def stop(self) -> None:
         if self._listener is not None:
             self._listener.stop()
@@ -142,6 +150,7 @@ class HotkeyListener:
             return
 
         if self.paused:
+            log.debug("hotkey ignored: dictation is paused")
             return
 
         if self._cancel_key is not None and key == self._cancel_key and self._recording:
@@ -155,6 +164,7 @@ class HotkeyListener:
         if not self._debounced():
             return
 
+        log.debug("combo satisfied: %s", self.cfg.trigger)
         self._active = True
         with self._lock:
             if self.cfg.mode == "toggle":

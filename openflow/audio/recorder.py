@@ -53,6 +53,24 @@ class Recorder:
         self._stream.start()
         log.info("audio stream open at %d Hz", self.cfg.sample_rate)
 
+    def reopen(self, device: int | None) -> None:
+        """Switch inputs without restarting the app. If the new device will not
+        open -- unplugged, held exclusively by something else -- the previous
+        one is restored, so a bad pick costs you nothing rather than leaving
+        the app with no microphone at all."""
+        previous = self.cfg.input_device
+        self.close()
+        self.cfg.input_device = device
+        try:
+            self.open()
+        except Exception:
+            self.cfg.input_device = previous
+            try:
+                self.open()
+            except Exception:
+                log.error("could not fall back to the previous input device")
+            raise
+
     def close(self) -> None:
         if self._stream is not None:
             self._stream.stop()
