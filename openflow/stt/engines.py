@@ -176,11 +176,29 @@ class ParakeetOnnx:
             return
         import onnx_asr
 
-        log.info("loading %s (first run downloads weights)", self.cfg.stt.parakeet_model)
-        self._model = onnx_asr.load_model(
-            self.cfg.stt.parakeet_model,
-            quantization=self.cfg.stt.parakeet_quantization or None,
-        )
+        from .providers import describe, select_providers
+
+        providers = select_providers(self.cfg.stt.device)
+        log.info("loading %s on %s (first run downloads weights)",
+                 self.cfg.stt.parakeet_model, describe(providers))
+        try:
+            self._model = onnx_asr.load_model(
+                self.cfg.stt.parakeet_model,
+                quantization=self.cfg.stt.parakeet_quantization or None,
+                providers=providers,
+            )
+        except Exception as exc:
+            # A GPU provider can be installed and still fail to initialize --
+            # missing cuDNN, a driver too old, a card already full. Falling
+            # back beats leaving the user with no local transcription.
+            if providers[:1] == ["CPUExecutionProvider"]:
+                raise
+            log.warning("%s failed (%s); retrying on CPU", providers[0], exc)
+            self._model = onnx_asr.load_model(
+                self.cfg.stt.parakeet_model,
+                quantization=self.cfg.stt.parakeet_quantization or None,
+                providers=["CPUExecutionProvider"],
+            )
 
     def transcribe(self, audio, sample_rate: int) -> str:
         try:

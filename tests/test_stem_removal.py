@@ -64,8 +64,18 @@ class StemRemovalInternals(unittest.TestCase):
 
     def test_bails_out_rather_than_guessing(self):
         _, retractions = remove_false_starts("The build passes locally, or actually in staging too.")
-        self.assertEqual("pivot-only", retractions[0].strategy)
+        self.assertEqual("keep-both", retractions[0].strategy)
         self.assertEqual("", retractions[0].removed)
+
+    def test_ambiguity_is_reported_apart_from_having_nothing_to_do(self):
+        # Both keep every word, but only one of them was a guess. The LLM pass
+        # is spent on "keep-both" and skipped on "pivot-only", so conflating
+        # them would either waste seconds or miss the case that needs help.
+        _, ambiguous = remove_false_starts(
+            "The build passes locally, or actually in staging too.")
+        _, nothing_to_do = remove_false_starts("Or actually, ship it on Friday.")
+        self.assertEqual("keep-both", ambiguous[0].strategy)
+        self.assertEqual("pivot-only", nothing_to_do[0].strategy)
 
 
 class Fillers(unittest.TestCase):

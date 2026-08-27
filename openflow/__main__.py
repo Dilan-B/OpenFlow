@@ -10,21 +10,41 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .config import CONFIG_PATH, Config
+from .exits import EXIT_OK, EXIT_SELF_TEST_FAILED
 
 
-def _configure_logging(verbose: bool) -> None:
+def _ensure_stdio() -> bool:
+    """Give a windowed build somewhere to write. Returns True when there was
+    no console to begin with.
+
+    Under pythonw.exe and PyInstaller's --noconsole, sys.stdout and sys.stderr
+    are None, and anything that writes to them raises AttributeError from a
+    place that never expected to fail: argparse's usage message on a bad
+    argument, huggingface_hub's download progress bar while the local STT
+    weights load. Point them at the null device so those paths are boring.
+    """
+    windowed = False
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            windowed = True
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+    return windowed
+
+
+def _configure_logging(verbose: bool, windowed: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S"
     )
 
-    # Under pythonw.exe there is no console: sys.stderr is None, and a
-    # StreamHandler pointed at it raises on the first log record. Fall back to
-    # a rotating file in the config directory.
-    if sys.stderr is None:
+    # With no console there is nothing behind sys.stderr but the null device,
+    # so a StreamHandler would silently discard every record. Fall back to a
+    # rotating file in the config directory.
+    if windowed:
         from logging.handlers import RotatingFileHandler
 
         from .config import CONFIG_DIR
@@ -114,7 +134,81 @@ def _check(config: Config) -> int:
     return 0
 
 
+def _self_test(parser: argparse.ArgumentParser) -> int:
+    """Check the things that only break once the app is packaged.
+
+    A source checkout cannot catch these: __file__ moves inside _internal/,
+    sys.executable stops being an interpreter, and modules that were never
+    collected into the bundle only fail on the machine that downloaded it.
+    CI runs this against the built exe so a broken package fails the build
+    instead of failing a user at sign-in.
+    """
+    import importlib
+
+    from . import shortcuts
+
+    failures: list[str] = []
+
+    def check(label: str, ok: bool, detail: str = "") -> None:
+        print(f"  {'PASS' if ok else 'FAIL'}  {label}{'  ' + detail if detail else ''}")
+        if not ok:
+            failures.append(label)
+
+    print(f"self-test  (frozen={shortcuts.FROZEN}, executable={sys.executable})")
+
+    # 1. The launcher we would write must be launchable. This is the exact
+    #    regression that shipped: OpenFlow.exe -m openflow --minimized.
+    target, arguments = shortcuts.app_target()
+    startup_args = (arguments + " --minimized").strip().split()
+    try:
+        parser.parse_args(startup_args)
+        check("startup arguments parse", True, f"{startup_args}")
+    except SystemExit:
+        check("startup arguments parse", False,
+              f"{startup_args} -- the app rejects its own startup shortcut")
+
+    check("launch target exists", target.exists(), str(target))
+
+    workdir = shortcuts.app_workdir()
+    check("working directory exists", workdir.is_dir(), str(workdir))
+    check("working directory is not _internal", workdir.name != "_internal", str(workdir))
+
+    icon = shortcuts.app_icon()
+    check("icon resolves", bool(icon) and icon.exists(), str(icon))
+
+    # 2. Std handles. None here is what made the failure silent.
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        ok = stream is not None
+        if ok:
+            try:
+                stream.write("")
+            except Exception:
+                ok = False
+        check(f"sys.{name} is writable", ok)
+
+    # 3. Modules PyInstaller has to have collected. An import that only fails
+    #    in the bundle is the other classic packaging break.
+    for module in ("PySide6.QtWidgets", "sounddevice", "numpy", "pynput",
+                   "pyperclip", "PIL", "onnx_asr"):
+        try:
+            importlib.import_module(module)
+            check(f"import {module}", True)
+        except Exception as exc:
+            check(f"import {module}", False, str(exc))
+
+    if failures:
+        print(f"\n{len(failures)} check(s) failed: {', '.join(failures)}")
+        return EXIT_SELF_TEST_FAILED
+    print("\nall checks passed")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Before argparse: a usage error in a windowed build writes to sys.stderr,
+    # and if that is None the app dies with no window and no message.
+    windowed = _ensure_stdio()
+
     parser = argparse.ArgumentParser(prog="openflow", description="System-wide voice-to-text.")
     parser.add_argument("--check", action="store_true", help="report backend readiness and exit")
     parser.add_argument("--write-config", action="store_true",
@@ -127,10 +221,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="create Desktop and Start Menu launchers (Windows)")
     parser.add_argument("--minimized", action="store_true",
                         help="start hidden in the system tray")
+    parser.add_argument("--self-test", action="store_true",
+                        help="verify a packaged build can launch itself, and exit")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    _configure_logging(args.verbose)
+    _configure_logging(args.verbose, windowed)
+
+    if args.self_test:
+        return _self_test(parser)
+
     config = Config.load()
 
     if args.write_config:

@@ -3,143 +3,254 @@
   "cases": [
     {
       "id": "prd-canonical",
-      "tags": ["re-anchor", "prd"],
+      "tags": [
+        "re-anchor",
+        "prd"
+      ],
       "input": "Can we meet up on tuesday at 5, or actually, can we meet up on friday at 3.",
       "expected": "Can we meet up on Friday at 3.",
       "note": "The exact example from PRD v2.0 section 3."
     },
     {
       "id": "reanchor-plain",
-      "tags": ["re-anchor"],
+      "tags": [
+        "re-anchor"
+      ],
       "input": "I'll send you the report tomorrow, or actually I'll send you the report on Monday.",
       "expected": "I'll send you the report on Monday."
     },
     {
       "id": "reanchor-wait-no",
-      "tags": ["re-anchor"],
+      "tags": [
+        "re-anchor"
+      ],
       "input": "the deploy goes out at noon, wait no, the deploy goes out at six.",
       "expected": "The deploy goes out at six."
     },
     {
       "id": "restart-different-clause",
-      "tags": ["restart"],
+      "tags": [
+        "restart"
+      ],
       "input": "We should ship the beta this week, actually, let's hold it until the audit clears.",
       "expected": "Let's hold it until the audit clears."
     },
     {
       "id": "restart-sorry-i-mean",
-      "tags": ["restart"],
+      "tags": [
+        "restart"
+      ],
       "input": "Put the config in the root folder, sorry I mean, we should keep it in the etc directory.",
       "expected": "We should keep it in the etc directory."
     },
     {
       "id": "slot-patch-day-and-time",
-      "tags": ["slot-patch"],
+      "tags": [
+        "slot-patch"
+      ],
       "input": "Let's meet Tuesday at 5, actually Friday at 3.",
       "expected": "Let's meet Friday at 3."
     },
     {
       "id": "slot-patch-number",
-      "tags": ["slot-patch"],
+      "tags": [
+        "slot-patch"
+      ],
       "input": "Order 12 units, or actually 20.",
       "expected": "Order 20 units."
     },
     {
       "id": "slot-patch-name",
-      "tags": ["slot-patch"],
+      "tags": [
+        "slot-patch"
+      ],
       "input": "Assign the ticket to Priya, or actually Marcus.",
       "expected": "Assign the ticket to Marcus."
     },
     {
       "id": "fillers-only",
-      "tags": ["filler"],
+      "tags": [
+        "filler"
+      ],
       "input": "um so we need to, you know, rebuild the index uh before friday",
       "expected": "So we need to rebuild the index before Friday."
     },
     {
       "id": "filler-like-discourse",
-      "tags": ["filler"],
+      "tags": [
+        "filler"
+      ],
       "input": "it took, like, three hours to finish",
       "expected": "It took three hours to finish."
     },
     {
       "id": "filler-like-verb-preserved",
-      "tags": ["filler", "negative"],
+      "tags": [
+        "filler",
+        "negative"
+      ],
       "input": "I like the new onboarding flow.",
       "expected": "I like the new onboarding flow.",
       "note": "Soft filler must not eat the verb 'like'."
     },
     {
       "id": "negative-actually-midclause",
-      "tags": ["negative"],
+      "tags": [
+        "negative"
+      ],
       "input": "I actually finished the migration last night.",
       "expected": "I actually finished the migration last night.",
       "note": "Mid-clause 'actually' is emphasis, not a retraction."
     },
     {
       "id": "negative-right-turn",
-      "tags": ["negative"],
+      "tags": [
+        "negative"
+      ],
       "input": "Take the second right after the bridge.",
       "expected": "Take the second right after the bridge.",
       "note": "'right' is only a filler in discourse position."
     },
     {
       "id": "negative-no-pivot",
-      "tags": ["negative"],
+      "tags": [
+        "negative"
+      ],
       "input": "The cache warms on boot and the workers pick up jobs after that.",
       "expected": "The cache warms on boot and the workers pick up jobs after that."
     },
     {
       "id": "multi-sentence-scoped",
-      "tags": ["re-anchor", "scope"],
+      "tags": [
+        "re-anchor",
+        "scope"
+      ],
       "input": "The API is stable. We ship on tuesday, or actually we ship on thursday.",
       "expected": "The API is stable. We ship on Thursday.",
       "note": "A retraction must not reach back past the previous sentence."
     },
     {
       "id": "two-pivots-chained",
-      "tags": ["re-anchor", "chain"],
+      "tags": [
+        "re-anchor",
+        "chain"
+      ],
       "input": "Call him at 4, or actually call him at 5, wait no, call him at 6.",
       "expected": "Call him at 6."
     },
     {
       "id": "scratch-that",
-      "tags": ["restart"],
+      "tags": [
+        "restart"
+      ],
       "input": "Book the small conference room, scratch that, we need the auditorium for this one.",
       "expected": "We need the auditorium for this one."
     },
     {
       "id": "let-me-rephrase",
-      "tags": ["restart"],
+      "tags": [
+        "restart"
+      ],
       "input": "the thing is broken in a weird way, let me rephrase that, the parser drops trailing commas.",
       "expected": "The parser drops trailing commas."
     },
     {
       "id": "trailing-pivot-noop",
-      "tags": ["safety"],
+      "tags": [
+        "safety"
+      ],
       "input": "We can revisit this next quarter, actually.",
       "expected": "We can revisit this next quarter.",
       "note": "Nothing follows the pivot, so nothing may be deleted."
     },
     {
       "id": "ambiguous-keeps-both",
-      "tags": ["safety"],
+      "tags": [
+        "safety"
+      ],
       "input": "The build passes locally, or actually in staging too.",
       "expected": "The build passes locally, in staging too.",
       "note": "Additive 'actually': no slot overlap, so we drop only the pivot rather than guess."
     },
     {
       "id": "technical-terms-preserved",
-      "tags": ["formatting"],
+      "tags": [
+        "formatting"
+      ],
       "input": "run the PostgreSQL migration on the iOS build, um, before the gRPC cutover",
       "expected": "Run the PostgreSQL migration on the iOS build, before the gRPC cutover.",
       "note": "Capitalization of existing technical terms must never be altered."
     },
     {
       "id": "empty-input",
-      "tags": ["safety"],
+      "tags": [
+        "safety"
+      ],
       "input": "",
       "expected": ""
+    },
+    {
+      "id": "stutter-doubled-word",
+      "tags": [
+        "repetition"
+      ],
+      "input": "I I think the deploy goes out at noon.",
+      "expected": "I think the deploy goes out at noon."
+    },
+    {
+      "id": "stutter-tripled-article",
+      "tags": [
+        "repetition"
+      ],
+      "input": "the the the build passes locally.",
+      "expected": "The build passes locally."
+    },
+    {
+      "id": "stutter-repeated-phrase",
+      "tags": [
+        "repetition"
+      ],
+      "input": "can we can we meet on Friday at 3.",
+      "expected": "Can we meet on Friday at 3."
+    },
+    {
+      "id": "repetition-with-retraction",
+      "tags": [
+        "repetition",
+        "re-anchor"
+      ],
+      "input": "can we can we meet on tuesday at 5, or actually, can we meet on friday at 3.",
+      "expected": "Can we meet on Friday at 3.",
+      "note": "Stutter collapse must run before pivot detection, or the doubled clause looks like a re-anchor."
+    },
+    {
+      "id": "negative-legitimate-double",
+      "tags": [
+        "repetition",
+        "negative"
+      ],
+      "input": "He had had enough of the flaky tests.",
+      "expected": "He had had enough of the flaky tests.",
+      "note": "Real English doubling; collapsing it changes the tense."
+    },
+    {
+      "id": "negative-intensifier-repeat",
+      "tags": [
+        "repetition",
+        "negative"
+      ],
+      "input": "That was very very slow.",
+      "expected": "That was very very slow.",
+      "note": "Repeating an intensifier is emphasis, not a disfluency."
+    },
+    {
+      "id": "negative-non-adjacent-repeat",
+      "tags": [
+        "repetition",
+        "negative"
+      ],
+      "input": "The cat sat on the mat.",
+      "expected": "The cat sat on the mat."
     }
   ]
 }

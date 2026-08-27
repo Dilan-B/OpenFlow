@@ -1,0 +1,78 @@
+name: Release
+
+# Tag a version to publish an installer:
+#     git tag v1.1.0 && git push origin v1.1.0
+#
+# The README's download link points at releases/latest/download/OpenFlowSetup.exe,
+# so whatever this attaches becomes what new users get. Nothing is published
+# unless the frozen build passes its smoke test first.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.1.0), no leading v"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if (-not $v) { $v = "${{ github.ref_name }}" -replace '^v', '' }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "version '$v' is not x.y.z" }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "building $v"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -t .
+
+      - name: Build
+        run: pyinstaller OpenFlow.spec --noconfirm --clean
+
+      - name: Smoke-test the frozen build
+        shell: pwsh
+        run: ./scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow/OpenFlow.exe
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /DMyAppVersion=${{ steps.version.outputs.version }} installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+
+      # The installer ships unsigned -- a code signing certificate is a paid,
+      # identity-verified purchase, and this project isn't buying one. That
+      # means SmartScreen shows an "unrecognized app" wall on download; the
+      # README's Known gaps section says so.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: OpenFlow ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: dist_installer/OpenFlowSetup.exe

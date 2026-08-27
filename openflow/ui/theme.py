@@ -113,6 +113,9 @@ PILL_BAR_COLOR = {
     "transcribing": "#F2B441",
     "injecting": "#3DDC97",
     "error": "#EF5B5B",
+    # Undo put the raw transcript back. Violet rather than green: something
+    # happened, but it was a correction, not a successful dictation.
+    "undone": "#A78BFA",
 }
 
 SANS = "Segoe UI"
