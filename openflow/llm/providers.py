@@ -120,6 +120,22 @@ class OllamaProvider:
         OllamaProvider._probe = (now, resolved)
         return bool(resolved)
 
+    def warm(self, timeout_s: float) -> None:
+        """Pull the weights into memory. Takes its own timeout because a cold
+        load is an order of magnitude slower than a warm request, and this runs
+        where nobody is waiting on it."""
+        _post(
+            f"{self.host}/api/chat",
+            {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "stream": False,
+                "keep_alive": "30m",
+                "options": {"num_predict": 1, "temperature": 0.0},
+            },
+            timeout=timeout_s,
+        )
+
     def complete(self, system: str, user: str, *, strict: bool = True) -> str:
         messages: list[dict] = [{"role": "system", "content": system}]
         # Few-shot pairs keep small models in editing mode (PRD section 5).
@@ -165,7 +181,27 @@ class GeminiProvider:
         self.key = api_key("GEMINI_API_KEY") or api_key("GOOGLE_AI_STUDIO_KEY")
 
     def available(self) -> bool:
+        # Deliberately offline: this runs on every UI refresh. It answers "is
+        # this configured", not "does it work" -- see verify().
         return bool(self.key)
+
+    def verify(self) -> str | None:
+        """One real round-trip. None when the backend genuinely works, else a
+        short reason. available() cannot see a retired model, which is how a
+        config pinned to gemini-1.5-flash kept reporting ready while every
+        cleanup silently fell through to the rules pass."""
+        if not self.key:
+            return "GEMINI_API_KEY is not set"
+        try:
+            self.complete("Reply with the single word: ok", "ok", strict=False)
+        except ProviderError as exc:
+            reason = " ".join(str(exc).split())
+            if "404" in reason:
+                return f"model {self.model!r} is not available to this key"
+            if "429" in reason:
+                return "daily quota exhausted"
+            return reason[:110]
+        return None
 
     def complete(self, system: str, user: str, *, strict: bool = True) -> str:
         if not self.key:

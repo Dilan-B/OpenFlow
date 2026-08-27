@@ -158,7 +158,7 @@ class OpenFlowApp:
 
     def _warm_llm(self) -> None:
         """Load the local model's weights before the first dictation needs
-        them -- a cold Ollama start costs about six seconds."""
+        them. Measured: ~18 s cold for llama3.1:8b, ~2 s once resident."""
         if not self.config.llm.enabled or "ollama" not in self.config.llm.backends:
             return
         try:
@@ -166,8 +166,10 @@ class OpenFlowApp:
 
             provider = OllamaProvider(self.config)
             if provider.available():
-                provider.complete("Reply with the single word: ok", "ok", strict=False)
-                log.info("ollama warm (%s)", provider.model)
+                started = time.monotonic()
+                provider.warm(self.config.llm.warmup_timeout_s)
+                log.info("ollama warm (%s) in %.1fs",
+                         provider.model, time.monotonic() - started)
         except Exception as exc:
             log.debug("ollama warm-up skipped: %s", exc)
 

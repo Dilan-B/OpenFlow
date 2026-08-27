@@ -89,6 +89,13 @@ def _check(config: Config) -> int:
         limit = config.llm.daily_limits.get(name)
         used = quota.used(name)
         suffix = f"  [{used}/{limit} today]" if limit else ""
+        # "Configured" is not "working": a retired model answers available()
+        # with a cheerful yes. Ask the service itself where we can.
+        verify = getattr(provider, "verify", None) if ready == "ready" else None
+        if verify is not None:
+            problem = verify()
+            if problem:
+                ready, suffix = "BROKEN", f"  {problem}"
         print(f"  {name:<16} {ready}{suffix}")
 
     print("\ninput/output:")

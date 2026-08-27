@@ -76,8 +76,16 @@ class LlmConfig:
     backends: list[str] = field(default_factory=lambda: ["gemini", "ollama", "rules"])
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+    # An alias, not a pinned version: pinned names retire. A config saved
+    # before this default changed keeps the old name forever, which is how
+    # a dead gemini-1.5-flash can outlive the code that stopped naming it.
     gemini_model: str = "gemini-flash-lite-latest"
     timeout_s: float = 6.0
+    # Warm-up runs off the dictation path, so it can wait out a cold load;
+    # measured ~18 s for llama3.1:8b, against which timeout_s never stood a
+    # chance. Sharing one timeout meant warm-up failed and the cold load
+    # then landed on the first real dictation instead.
+    warmup_timeout_s: float = 90.0
     # Daily free-tier ceilings; crossing one flips the router to the next
     # backend for the rest of the day (PRD section 4).
     # Groq's published free tier is 2,000 speech-to-text requests/day.
