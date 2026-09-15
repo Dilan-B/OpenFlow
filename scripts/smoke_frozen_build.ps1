@@ -14,6 +14,10 @@
 
 .EXAMPLE
     pwsh scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow/OpenFlow.exe
+
+.EXAMPLE
+    # macOS: point at the binary inside the bundle, not the .app directory.
+    pwsh scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow.app/Contents/MacOS/OpenFlow
 #>
 param(
     [string]$ExePath = "dist/OpenFlow/OpenFlow.exe",

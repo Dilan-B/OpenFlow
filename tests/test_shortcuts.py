@@ -81,6 +81,41 @@ class SourceCheckoutLaunchTarget(unittest.TestCase):
         self.assertEqual(target, shortcuts.pythonw())
 
 
+class SelfTestFromSource(unittest.TestCase):
+    """`python -m openflow --self-test` in a checkout with no packaged build.
+
+    The launcher there is ``pythonw -m openflow --minimized``. The interpreter
+    eats ``-m openflow``, so the self-test must not feed those flags to the
+    app's parser -- doing so failed CI on every push, because a CI checkout
+    never has dist/OpenFlow/OpenFlow.exe to fall back to.
+    """
+
+    def test_interpreter_flags_are_not_parsed_as_app_arguments(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with mock.patch.multiple(shortcuts, FROZEN=False), \
+                mock.patch.object(shortcuts, "PROJECT_ROOT", Path(r"C:\nope")), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            main(["--self-test"])
+        self.assertIn("PASS  startup arguments parse  ['--minimized']", out.getvalue())
+
+    def test_a_frozen_build_still_rejects_interpreter_flags(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with mock.patch.multiple(shortcuts, FROZEN=True), \
+                mock.patch.object(shortcuts, "app_target",
+                                  return_value=(Path(FAKE_EXE), "-m openflow")), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(io.StringIO()):
+            main(["--self-test"])
+        self.assertIn("FAIL  startup arguments parse", out.getvalue())
+
+
 class WindowedStdio(unittest.TestCase):
     """A build with no console must still be able to write."""
 

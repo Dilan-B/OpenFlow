@@ -160,6 +160,12 @@ def _self_test(parser: argparse.ArgumentParser) -> int:
     #    regression that shipped: OpenFlow.exe -m openflow --minimized.
     target, arguments = shortcuts.app_target()
     startup_args = (arguments + " --minimized").strip().split()
+    # From a source checkout the launcher is `pythonw -m openflow --minimized`:
+    # the interpreter consumes "-m openflow" and only the rest reaches this
+    # parser. A frozen build has no interpreter, so there the flags stay in and
+    # the check still catches the shipped bug.
+    if not shortcuts.FROZEN and startup_args[:2] == ["-m", "openflow"]:
+        startup_args = startup_args[2:]
     try:
         parser.parse_args(startup_args)
         check("startup arguments parse", True, f"{startup_args}")

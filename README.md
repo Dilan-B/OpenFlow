@@ -4,6 +4,28 @@
 — Windows installer, no Python required. Run it, then launch OpenFlow from the
 Start Menu or Desktop.
 
+**[⬇ Download OpenFlow-mac.dmg](https://github.com/Dilan-B/OpenFlow/releases/latest/download/OpenFlow-mac.dmg)**
+— macOS 14 or later on Apple Silicon (M1 and newer; Intel Macs are not
+supported). Open it and drag OpenFlow into Applications. See
+[First launch on macOS](#first-launch-on-macos): the app is unsigned, so macOS
+blocks it until you approve it once.
+
+### First launch on macOS
+
+1. **Get past Gatekeeper.** Double-click OpenFlow. macOS says it can't verify
+   the app; click Done. Open **System Settings → Privacy & Security**, scroll
+   down to the message about OpenFlow, click **Open Anyway**, and confirm.
+   You only do this once per version.
+2. **Microphone.** macOS asks the first time you dictate; click Allow.
+3. **Accessibility** (typing into other apps) and **Input Monitoring** (the
+   global shortcut). Add OpenFlow under **System Settings → Privacy & Security**
+   in both lists, then quit OpenFlow from the menu bar icon and reopen it.
+   Permissions only apply after a restart of the app.
+
+Hold **Control + Cmd** to dictate. Because the app is not signed with an Apple
+Developer ID, macOS may ask for Accessibility and Input Monitoring again after
+you install a new version.
+
 System-wide voice-to-text for Windows/macOS/Linux. Hold a hotkey, talk, release
 — cleaned-up text lands in whatever app had your cursor. Implements
 `wispr_flow_clone_spec-v2.pdf` (PRD v2.0).
@@ -426,8 +448,12 @@ Conflating the first two is what let the broken shortcut go unnoticed.
   The same applies to any trigger — keystrokes are not swallowed, so pick a
   chord your apps don't already use. Ctrl+Win is chosen because it's inert on
   Windows: holding Ctrl suppresses the Start menu a bare Win keyup would open.
-- macOS requires granting Accessibility and Microphone permissions to the host
-  terminal before hotkeys or injection work at all.
+- The macOS build is packaged and smoke-tested in CI, but that only proves it
+  launches: CI can't grant permissions or hear a microphone, so dictation on a
+  real Mac is untested. Muting other apps while dictating is Windows-only, the
+  sidebar icons use a Windows font (Segoe Fluent), and "Start with Windows"
+  does nothing on a Mac. From a source checkout, Accessibility and Microphone
+  permissions go to the terminal running Python instead of the app.
 - Gemini's `daily_limits` value (1400) is still a placeholder — Groq's 2000/day
   and 7200 audio-s/hour are the published free-tier figures. Verify the Groq
   model IDs against their docs; naming there has churned.

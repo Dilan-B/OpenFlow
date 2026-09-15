@@ -13,6 +13,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 ICO_PATH = Path(__file__).resolve().parent.parent.parent / "assets" / "openflow.ico"
+ICNS_PATH = ICO_PATH.with_suffix(".icns")
 
 # Geometry on a 130-unit tile: (x, y, width, height) per bar.
 _BARS = (
@@ -76,6 +77,27 @@ def write_ico(path: Path | None = None) -> Path | None:
     return path
 
 
+def write_icns(path: Path | None = None) -> Path | None:
+    """Generate the .icns the macOS app bundle carries.
+
+    macOS icons don't bleed to the edge: Apple's grid puts an 824px tile inside
+    a 1024px canvas, and a full-bleed tile looks oversized next to every other
+    icon in the Dock.
+    """
+    path = path or ICNS_PATH
+    try:
+        from PIL import Image
+    except ImportError:
+        log.info("Pillow not installed; skipping icon generation")
+        return None
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+    canvas.alpha_composite(mic_image(824), (100, 100))
+    canvas.save(path, format="ICNS")
+    return path
+
+
 def ensure_ico() -> Path | None:
     if ICO_PATH.exists():
         return ICO_PATH
@@ -84,3 +106,4 @@ def ensure_ico() -> Path | None:
 
 if __name__ == "__main__":
     print(write_ico())
+    print(write_icns())
