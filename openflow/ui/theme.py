@@ -11,6 +11,8 @@ identity (which section), quantity (charts, stat numbers) and state.
 
 from __future__ import annotations
 
+import sys
+
 # Canvas + surfaces
 BG = "#F4F2ED"            # warm cream window canvas (sidebar sits on this)
 PANEL = "#FFFFFF"         # the big rounded content panel
@@ -128,6 +130,10 @@ def pretty_hotkey(combo: str) -> str:
         "<space>": "Space", "<caps_lock>": "Caps Lock", "<esc>": "Esc",
         "<tab>": "Tab", "<enter>": "Enter", "<backspace>": "Backspace",
     }
+    if sys.platform == "darwin":
+        # pynput's <cmd> is the Command key on a Mac, and Mac keyboards label
+        # Alt as Option.
+        names.update({"<ctrl>": "Control", "<alt>": "Option", "<cmd>": "Cmd"})
     parts = []
     for raw in combo.split("+"):
         token = raw.strip()
