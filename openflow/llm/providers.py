@@ -168,6 +168,82 @@ class OllamaProvider:
         return sanitize(data.get("message", {}).get("content", ""), original=user, strict=strict)
 
 
+class GroqProvider:
+    """Groq's OpenAI-compatible chat endpoint, on the key already used for STT.
+
+    This is the fast path for cleanup. Measured against the same one-line
+    retraction case: gpt-oss-20b 237 ms, gpt-oss-120b 477 ms, Gemini
+    flash-lite 585 ms, local llama3.1:8b ~2,700 ms. Speed is the whole
+    argument -- cleanup sits between the user releasing the hotkey and the
+    text appearing, so every millisecond here is one they wait through.
+    """
+
+    name = "groq"
+    is_local = False
+    # 20B is small enough to wander into rewriting if left unconstrained, so it
+    # gets the editing guardrails and few-shot pairs that the local models get,
+    # despite being a cloud backend.
+    small = True
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(self, config: Config) -> None:
+        self.cfg = config.llm
+        self.model = self.cfg.groq_model
+        self.key = api_key("GROQ_API_KEY")
+
+    def available(self) -> bool:
+        return bool(self.key)
+
+    def verify(self) -> str | None:
+        """One real round-trip, for the Settings page. ``available`` only says
+        the key exists; this says the model answers to it."""
+        if not self.key:
+            return "GROQ_API_KEY is not set"
+        try:
+            self.complete("Reply with the single word: ok", "ok", strict=False)
+        except ProviderError as exc:
+            reason = " ".join(str(exc).split())
+            if "404" in reason or "model_not_found" in reason:
+                return f"model {self.model!r} is not available to this key"
+            if "429" in reason:
+                return "daily quota exhausted"
+            return reason[:110]
+        return None
+
+    def complete(self, system: str, user: str, *, strict: bool = True) -> str:
+        if not self.key:
+            raise ProviderError("GROQ_API_KEY is not set")
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for example_in, example_out in FEW_SHOT[:2]:
+            messages.append({"role": "user", "content": example_in})
+            messages.append({"role": "assistant", "content": example_out})
+        messages.append({"role": "user", "content": user})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.cfg.temperature,
+            "max_tokens": 512,
+            "stream": False,
+        }
+        # gpt-oss models reason before answering. Editing a sentence needs none
+        # of it, and the tokens are pure latency on the dictation path.
+        if "gpt-oss" in self.model:
+            payload["reasoning_effort"] = "low"
+
+        data = _post(
+            self.url,
+            payload,
+            timeout=self.cfg.timeout_s,
+            headers={"Authorization": f"Bearer {self.key}"},
+        )
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise ProviderError(f"unexpected response shape: {exc}") from exc
+        return sanitize(text or "", original=user, strict=strict)
+
+
 class GeminiProvider:
     """Google AI Studio free tier (Gemini 1.5 Flash), per PRD section 4."""
 
@@ -232,12 +308,35 @@ def build_provider(name: str, config: Config) -> Provider:
         return OllamaProvider(config)
     if name == "gemini":
         return GeminiProvider(config)
+    if name == "groq":
+        return GroqProvider(config)
     raise ValueError(f"unknown LLM provider: {name}")
 
 
 def system_prompt_for(provider: Provider) -> str:
-    prompt = build_system_prompt(local=provider.is_local)
+    # "small" is the real question the supplement answers -- will this model
+    # rewrite when asked to edit? Local models all do; so does a 20B cloud one.
+    # Default to is_local so providers that never set it keep their behaviour.
+    small = getattr(provider, "small", provider.is_local)
+    prompt = build_system_prompt(local=small)
     from ..personalization import shared
 
-    style = shared().style_instruction()
-    return f"{prompt}\n\n{style}" if style else prompt
+    personal = shared()
+    parts = [prompt]
+    style = personal.style_instruction()
+    if style:
+        parts.append(style)
+    # Names the speaker uses and corrections they have taught us. Both are
+    # about the same failure: the model "fixing" a term it does not recognise.
+    names = personal.vocabulary_hint(budget=400)
+    if names:
+        parts.append(
+            "KNOWN TERMS: the following are spelled correctly and must be kept "
+            f"exactly as written: {names}."
+        )
+    from ..corrections import shared as corrections
+
+    taught = corrections().prompt_hint()
+    if taught:
+        parts.append(taught)
+    return "\n\n".join(parts)

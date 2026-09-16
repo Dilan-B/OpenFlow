@@ -58,6 +58,7 @@ appears on whichever monitor your cursor is on. Both are toggleable in Settings.
 | LLM output guards (containment, length, preamble stripping) | Implemented + tested |
 | Free-tier quota ledger (daily requests + rolling hourly audio) | Implemented + tested |
 | STT routing (Groq → Parakeet ONNX → faster-whisper) | Implemented; local path verified end to end on real ASR output |
+| Learned corrections (edit once, applied thereafter) | Implemented + tested (25 cases) |
 | Post-processing routing (Gemini → Ollama → rules) | Implemented; not exercised against live APIs (no keys set) |
 | Orchestrator (overlay + worker + injection) | Boots and carries synthesized speech through to injected text |
 | Global hotkeys, mic capture, keystroke injection | Hotkey parsing, mic capture, and overlay verified; real keystroke injection not yet fired into another app |
@@ -123,13 +124,19 @@ Measured on this machine, same 3.9 s utterance, all producing identical text:
 | speech-to-text | Groq Whisper (cloud) | **341 ms** |
 | speech-to-text | Parakeet int8 (local) | 532 ms |
 | cleanup | rules (deterministic) | **0.1 ms** |
+| cleanup | Groq gpt-oss-20b | **237 ms** |
 | cleanup | Gemini flash-lite | 585 ms |
 | cleanup | Ollama llama3.1:8b | 2,700 ms |
 
-End to end that is **~350 ms** from key release to text on screen. The AI
-cleanup pass is **off by default**: the deterministic pass already implements
-the PRD's editing spec, so on ordinary dictation the AI produces the same
-sentence for seconds more. Turn it on in Settings if you want it.
+End to end that is **~350 ms** from key release to text on screen with the
+rules pass, **~600 ms** with AI cleanup on.
+
+The AI cleanup pass is **on by default** since the Groq backend landed. It was
+off when the cheapest cloud option cost half a second to reproduce what the
+deterministic pass already did; at ~240 ms the trade flips, and the model
+catches the sentence-level repairs — dropped fillers, abandoned clauses,
+mid-sentence restarts — that no rule can detect reliably. Turn it off in
+Settings to get the sub-350 ms path back.
 
 ### API keys (optional — everything falls back to local/deterministic)
 
@@ -370,8 +377,10 @@ Writes `~/.openflow/config.json`. Notable keys:
 | `stt.parakeet_model` | `nemo-parakeet-tdt-0.6b-v3` (25 languages) or `-v2` (English, slightly faster) |
 | `stt.parakeet_quantization` | `""` or `int8` to halve load time |
 | `stt.moonshine_arch` | `TINY`, `BASE`, `SMALL_STREAMING`, `MEDIUM_STREAMING` |
-| `llm.enabled` | master switch for the AI cleanup pass — off by default (see below) |
-| `llm.backends` | fallback order: `gemini`, `ollama`, `rules` |
+| `llm.enabled` | master switch for the AI cleanup pass — on by default (see below) |
+| `llm.backends` | fallback order: `groq`, `gemini`, `ollama`, `rules` |
+| `llm.groq_model` | cleanup model on Groq's free tier (default `openai/gpt-oss-20b`) |
+| `llm.only_when_uncertain` | call the model only where the rules pass flagged itself unsure — off by default |
 | `llm.daily_limits` | free-tier request ceilings per provider per day |
 | `llm.hourly_audio_seconds` | rolling audio-duration ceiling (Groq: 7200/hour) |
 | `injection.method` | `paste` (fast) or `type` |
@@ -383,6 +392,32 @@ current transcription optimizations and free-tier APIs, with four concrete
 recommended changes (Parakeet-via-ONNX as the local backend, Moonshine for
 short utterances, corrected Groq quota numbers, and a transcript-containment
 guard against LLM hallucination).
+
+## Learning from your corrections
+
+Dictation that never learns makes the same mistake forever. Hit **Fix last** on
+the Dictation page (or **Fix** on any logged entry), edit the text to what you
+actually said, and OpenFlow diffs the two and keeps the difference.
+
+What a learned correction then does, in increasing order of leverage:
+
+1. **Replayed** on every later transcript, so the same error is repaired before
+   it reaches the screen.
+2. **Named in the cleanup prompt**, so the model stops "helpfully" reverting a
+   spelling you just fixed.
+3. **Promoted into the Dictionary** when the fix is a single proper noun. This
+   is the one that matters: dictionary terms ride along in the Whisper prompt,
+   so the name is biased *for* before it is ever mis-heard. Downstream repair
+   can only patch a word the recogniser already got wrong.
+
+Only substitutions are learned. Deleting or adding a clause is you editing your
+own words, not correcting ours, and replaying that later would be wrong.
+
+A correction is applied automatically once it has been made twice — except a
+proper-noun fix, which is trusted the first time, because repeating yourself
+will never make a recogniser guess how you spell a name. Everything lives in
+`~/.openflow/corrections.json`, is never transmitted, and each rule can be
+removed from the Dictionary page.
 
 ## Undo, profiles, and the rest
 

@@ -22,6 +22,22 @@ from ..config import CONFIG_DIR
 HOUR_S = 3600.0
 
 
+def is_daily_exhaustion(message: str) -> bool:
+    """True when a 429 means "out for the day", not "slow down".
+
+    Providers return the same status code for both, and the difference matters
+    enormously: a per-minute limit clears in seconds, a daily one does not.
+    Treating every 429 as daily is how a burst of requests -- a harness run, a
+    fast typist dictating in a row -- switches a working backend off until
+    midnight. Groq names the window in the body ("on requests per day (RPD)"
+    versus "per minute (RPM)"), so read it rather than assuming the worse case.
+    Unrecognised wording is treated as transient: guessing wrong that way costs
+    one retry, guessing wrong the other way costs the rest of the day.
+    """
+    text = message.lower()
+    return "per day" in text or "rpd" in text or "daily" in text
+
+
 class QuotaLedger:
     def __init__(self, path: Path | None = None, *, clock=time.time) -> None:
         self.path = path or (CONFIG_DIR / "quota.json")
