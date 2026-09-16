@@ -20,13 +20,14 @@ import time
 from PySide6.QtCore import Qt, QRect, QRectF, QTimer
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel,
+    QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QPushButton, QScrollArea, QSizePolicy,
     QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
 from .. import __version__
 from ..config import CONFIG_DIR, Config
+from ..corrections import shared as corrections
 from ..history import History
 from ..personalization import STYLES, Personalization
 from . import theme
@@ -585,6 +586,14 @@ class MainWindow(QMainWindow):
         kicker.setObjectName("Kicker")
         history_head.addWidget(kicker)
         history_head.addStretch()
+        # Correcting the last dictation works whether or not transcripts are
+        # being logged: the text is still in memory from the insertion, so this
+        # does not depend on a privacy setting the user may have left off.
+        fix = QPushButton("Fix last")
+        fix.setObjectName("Ghost")
+        fix.setToolTip("Correct the last dictation and teach OpenFlow the fix")
+        fix.clicked.connect(self.fix_last)
+        history_head.addWidget(fix)
         clear = QPushButton("Clear")
         clear.setObjectName("Ghost")
         clear.clicked.connect(lambda: (self.cb["clear_history"](), self.refresh()))
@@ -686,6 +695,12 @@ class MainWindow(QMainWindow):
             text.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             row.addWidget(text, 1)
             if entry.text:
+                fix = QPushButton("Fix")
+                fix.setObjectName("Ghost")
+                fix.setToolTip("Correct this and teach OpenFlow the fix")
+                fix.clicked.connect(
+                    lambda _=False, t=entry.text: self.correct_text(t))
+                row.addWidget(fix)
                 copy = QPushButton()
                 copy.setObjectName("Ghost")
                 copy.setIcon(fluent_icon("", theme.TEXT_FAINT, 13))
@@ -882,8 +897,28 @@ class MainWindow(QMainWindow):
         terms.setSpacing(0)
         list_card.addLayout(terms)
         self._w["dict_layout"] = terms
+
+        learned_head = QHBoxLayout()
+        learned_title = QLabel("Learned from your corrections")
+        learned_title.setObjectName("H2")
+        learned_head.addWidget(learned_title)
+        learned_head.addStretch()
+        toast = QLabel("")
+        toast.setObjectName("Faint")
+        learned_head.addWidget(toast)
+        self._w["dict_toast"] = toast
+        layout.addSpacing(14)
+        layout.addLayout(learned_head)
+
+        learned_card = self._card(layout, margins=(6, 4, 6, 4))
+        learned_rows = QVBoxLayout()
+        learned_rows.setSpacing(0)
+        learned_card.addLayout(learned_rows)
+        self._w["corrections_layout"] = learned_rows
+
         layout.addStretch()
         self._render_terms()
+        self._render_corrections()
 
     def _render_terms(self) -> None:
         terms = self._w.get("dict_layout")
@@ -914,6 +949,122 @@ class MainWindow(QMainWindow):
                                          self._render_terms()))
             row.addWidget(remove)
             terms.addWidget(row_frame)
+
+    # ------------------------------------------------------------ corrections
+    def fix_last(self) -> None:
+        """Correct the most recent dictation, wherever it landed."""
+        text = self.cb["last_text"]()
+        if not text:
+            self._toast("Nothing dictated yet in this session.")
+            return
+        self.correct_text(text)
+
+    def correct_text(self, original: str) -> None:
+        """Show the text as OpenFlow produced it and learn whatever is changed.
+
+        The corrected text is copied to the clipboard rather than typed back
+        into the app it came from. Re-injecting would mean sending keystrokes
+        while the user's caret is in *this* window, and the only safe moment to
+        do that passed as soon as they clicked into the dialog.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Fix this dictation")
+        dialog.setMinimumWidth(560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
+
+        blurb = QLabel(
+            "Edit the text to what you actually said. OpenFlow remembers the "
+            "difference and applies it to future dictations."
+        )
+        blurb.setObjectName("Sub")
+        blurb.setWordWrap(True)
+        layout.addWidget(blurb)
+
+        editor = QTextEdit()
+        editor.setPlainText(original)
+        editor.setMinimumHeight(140)
+        layout.addWidget(editor)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("Ghost")
+        cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel)
+        save = QPushButton("Save and learn")
+        save.setObjectName("Primary")
+        save.clicked.connect(dialog.accept)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        corrected = editor.toPlainText().strip()
+        learned = self.cb["learn"](original, corrected)
+        self._copy(corrected)
+        if learned:
+            self._toast(
+                f"Learned {len(learned)} correction"
+                f"{'' if len(learned) == 1 else 's'} — copied to clipboard."
+            )
+        else:
+            self._toast("Copied to clipboard.")
+        self._render_corrections()
+
+    def _render_corrections(self) -> None:
+        rows = self._w.get("corrections_layout")
+        if rows is None:
+            return
+        _clear(rows)
+        store = corrections()
+        entries = sorted(store.entries, key=lambda e: (e.count, e.at), reverse=True)
+        if not entries:
+            empty = QLabel(
+                "Nothing learned yet. Use Fix on a dictation and the change "
+                "will show up here."
+            )
+            empty.setObjectName("Faint")
+            empty.setWordWrap(True)
+            empty.setContentsMargins(12, 10, 12, 10)
+            rows.addWidget(empty)
+            return
+        active = {(e.before, e.after) for e in store.active()}
+        for i, entry in enumerate(entries):
+            if i:
+                rows.addWidget(_hairline())
+            row_frame = QFrame()
+            row_frame.setObjectName("Row")
+            row = QHBoxLayout(row_frame)
+            row.setContentsMargins(12, 9, 8, 9)
+            label = QLabel(f"{entry.before}  →  {entry.after}")
+            label.setStyleSheet("background: transparent; font-size: 13px;")
+            row.addWidget(label)
+            row.addStretch()
+            # A correction seen once is kept but not replayed -- saying so
+            # avoids the "I taught it and nothing happened" confusion.
+            state = QLabel("active" if (entry.before, entry.after) in active
+                           else "seen once")
+            state.setObjectName("Faint")
+            row.addWidget(state)
+            remove = QPushButton("Forget")
+            remove.setObjectName("Ghost")
+            remove.clicked.connect(
+                lambda _=False, b=entry.before, a=entry.after: (
+                    corrections().forget(b, a), self._render_corrections()))
+            row.addWidget(remove)
+            rows.addWidget(row_frame)
+
+    def _toast(self, message: str) -> None:
+        """Transient status line. Falls back to the log if the label is gone."""
+        label = self._w.get("dict_toast")
+        if label is None:
+            log.info("%s", message)
+            return
+        label.setText(message)
+        QTimer.singleShot(4000, lambda: label.setText(""))
 
     # --------------------------------------------------------------- snippets
     def _page_snippets(self, holder: QWidget) -> None:

@@ -14,6 +14,13 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("OPENFLOW_HOME", Path.home() / ".openflow"))
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
+# Bumped whenever a *default* changes in a way an existing config file would
+# otherwise mask. ``_migrate`` below carries saved files forward one step at a
+# time. Without this, a config written on day one pins every default it ever
+# saw -- which is how an install kept transcribing with whisper-large-v3-turbo
+# and the cleanup pass switched off, months after both defaults had changed.
+SCHEMA = 1
+
 
 @dataclass(slots=True)
 class HotkeyConfig:
@@ -70,22 +77,47 @@ class SttConfig:
     moonshine_arch: str = "BASE"
     local_model: str = "base.en"   # faster-whisper: base | small | medium (+ .en)
     local_compute_type: str = "int8"
-    groq_model: str = "whisper-large-v3-turbo"
+    # whisper-large-v3, not -turbo. Turbo is a 4-layer distilled decoder: much
+    # faster, and measurably worse on exactly the tokens dictation cares about
+    # -- proper nouns, product names, rare words. At dictation lengths (a few
+    # seconds of audio) the wall-clock difference is a fraction of the network
+    # round-trip we are already paying, so the speed buys nothing a user feels
+    # while the errors are ones they read.
+    groq_model: str = "whisper-large-v3"
     language: str = "en"
 
 
 @dataclass(slots=True)
 class LlmConfig:
-    # Master switch for the AI cleanup pass. Measured on this machine:
-    # rules 0.1 ms, Gemini flash-lite 585 ms, local Ollama 8B 2,700 ms -- and
-    # on ordinary dictation all three produce the same sentence, because the
-    # rules pass already implements the PRD's editing spec. Off by default:
-    # dictation is a latency product. The Settings toggle turns it on.
-    enabled: bool = False
+    # Master switch for the AI cleanup pass. On by default since the Groq
+    # backend landed: measured here, rules 0.1 ms, Groq gpt-oss-20b 237 ms,
+    # Gemini flash-lite 585 ms, local Ollama 8B 2,700 ms. The earlier default
+    # was off because the only cloud option cost half a second to reproduce
+    # what the rules pass already did. At ~240 ms the trade flips -- that is
+    # below the threshold where a dictation feels delayed, and it buys the
+    # sentence-level repairs the deterministic pass cannot do.
+    enabled: bool = True
     # "rules" is always the last resort and never fails.
-    backends: list[str] = field(default_factory=lambda: ["gemini", "ollama", "rules"])
+    backends: list[str] = field(
+        default_factory=lambda: ["groq", "gemini", "ollama", "rules"]
+    )
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+    # Groq's OpenAI-compatible chat endpoint, reusing GROQ_API_KEY.
+    # Measured with scripts/bench_cleanup.py: gpt-oss-20b 287 ms/call,
+    # qwen3.8-27b 201 ms, gpt-oss-120b 438 ms. On the golden corpus all three
+    # were 29/29 normalized. gpt-oss-20b wins the default on two things the
+    # latency number does not show: reasoning_effort is controllable (a
+    # reasoning model that leaks its thinking fails the containment guard and
+    # costs a wasted round-trip), and it has the larger free-tier token budget
+    # -- 8,000 tokens/minute against qwen's 7,000 input tokens/minute.
+    #
+    # That budget, not the request count, is the real ceiling: the system
+    # prompt runs several hundred tokens, so sustained rapid-fire dictation can
+    # hit tokens-per-minute long before the daily request cap. Crossing it is a
+    # soft failure -- the request 429s and the deterministic pass answers
+    # instead -- but it is why only_when_uncertain exists as an escape hatch.
+    groq_model: str = "openai/gpt-oss-20b"
     # An alias, not a pinned version: pinned names retire. A config saved
     # before this default changed keeps the old name forever, which is how
     # a dead gemini-1.5-flash can outlive the code that stopped naming it.
@@ -99,8 +131,12 @@ class LlmConfig:
     # Daily free-tier ceilings; crossing one flips the router to the next
     # backend for the rest of the day (PRD section 4).
     # Groq's published free tier is 2,000 speech-to-text requests/day.
+    # "groq" is speech-to-text; "groq_chat" is the cleanup LLM. They are
+    # separate free-tier allowances on Groq's side, so they get separate
+    # counters here -- sharing one would let a day of dictation cleanup
+    # switch off cloud transcription, which is the more valuable of the two.
     daily_limits: dict[str, int] = field(
-        default_factory=lambda: {"gemini": 1_400, "groq": 2_000}
+        default_factory=lambda: {"gemini": 1_400, "groq": 2_000, "groq_chat": 1_000}
     )
     # Groq also caps audio *duration*: 7,200 seconds per rolling hour. Requests
     # alone will never hit this at dictation lengths, but a long session can.
@@ -111,12 +147,13 @@ class LlmConfig:
     # Run the deterministic pass before the LLM so a slow/broken model still
     # leaves you with cleaned-up text.
     rules_prepass: bool = True
-    # Only pay the LLM's latency when the rules pass says it was unsure -- it
-    # found a retraction pivot but could not tell how much the speaker threw
-    # away. Measured here, every backend produced identical output on ordinary
-    # dictation while costing 585 ms (Gemini) to 2,700 ms (local 8B), so on the
-    # common path the model is buying nothing. Set False to always call it.
-    only_when_uncertain: bool = True
+    # Call the LLM on every dictation, not only when the rules pass admitted
+    # it was guessing. The old True default made llm.enabled almost a no-op:
+    # "uncertain" means stem_removal hit its keep-both branch, which is rare,
+    # so turning the cleanup on changed nothing the user could see. The rules
+    # pass cannot know it mis-handled a sentence -- that is precisely the class
+    # of error it has no rule for. Set True to trade quality back for latency.
+    only_when_uncertain: bool = False
 
 
 @dataclass(slots=True)
@@ -197,6 +234,9 @@ class Config:
     profiles: ProfileConfig = field(default_factory=ProfileConfig)
     updates: UpdateConfig = field(default_factory=UpdateConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
+    # Which set of defaults this file was written against. 0 means "predates
+    # migrations"; see SCHEMA and _migrate.
+    schema: int = 0
     log_transcripts: bool = False   # off by default: dictation is sensitive
     # Set once the first-run welcome has been answered or dismissed. Separate
     # from ui.display_name so that skipping the prompt, or clearing the name
@@ -214,6 +254,7 @@ class Config:
         except (OSError, json.JSONDecodeError):
             return cfg
         _apply(cfg, data)
+        _migrate(cfg)
         # Migrate overlay geometry saved by older builds.
         if (cfg.ui.overlay_width, cfg.ui.overlay_height) in (
                 (260, 72), (170, 46), (124, 32), (96, 26)):
@@ -226,6 +267,29 @@ class Config:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
         return path
+
+
+def _migrate(cfg: "Config") -> None:
+    """Carry a saved config forward to the current defaults.
+
+    Only touches settings the user is very unlikely to have chosen
+    deliberately: a transcription model they never picked, and a cleanup pass
+    whose old default made it a no-op. Anything a user plausibly set on purpose
+    (hotkeys, devices, style) is left alone. Each step runs once -- turning the
+    cleanup back off afterwards sticks, because the schema has moved on.
+    """
+    if cfg.schema < 1:
+        if cfg.stt.groq_model == "whisper-large-v3-turbo":
+            cfg.stt.groq_model = SttConfig().groq_model
+        # The pair that made AI cleanup invisible: off, and gated to the rare
+        # branch where the rules pass flagged itself uncertain.
+        cfg.llm.enabled = True
+        cfg.llm.only_when_uncertain = False
+        if "groq" not in cfg.llm.backends:
+            cfg.llm.backends = ["groq"] + [b for b in cfg.llm.backends if b != "groq"]
+        for key, value in LlmConfig().daily_limits.items():
+            cfg.llm.daily_limits.setdefault(key, value)
+        cfg.schema = 1
 
 
 def _apply(target, data: dict) -> None:

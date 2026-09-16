@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 
 from ..config import Config
-from ..llm.quota import QuotaLedger
+from ..llm.quota import QuotaLedger, is_daily_exhaustion
 from .engines import SttError, build_engine
 
 log = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class SttRouter:
                 text = engine.transcribe(audio, sample_rate)
             except SttError as exc:
                 errors.append(f"{name}: {exc}")
-                if limit and "429" in str(exc):
+                if limit and "429" in str(exc) and is_daily_exhaustion(str(exc)):
                     self.quota.exhaust(name, limit)
                 continue
 

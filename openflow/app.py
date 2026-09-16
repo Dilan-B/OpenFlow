@@ -24,6 +24,7 @@ from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
 from .capture import Capture
 from .config import Config
+from .corrections import shared as corrections
 from .exits import EXIT_NO_HOTKEY, EXIT_NO_MICROPHONE, EXIT_OK
 from .history import Entry, History
 from .input.hotkeys import HotkeyListener, HotkeyUnavailable
@@ -66,6 +67,7 @@ class OpenFlowApp:
         self.injector = Injector(self.config.injection)
         self.ducker = AudioDucker()
         self.personal = personalization()
+        self.corrections = corrections()
         self.capture = Capture(self.config)
         self.hotkeys: HotkeyListener | None = None
         # (raw, cleaned, capture id, monotonic time) of the last insertion.
@@ -122,6 +124,8 @@ class OpenFlowApp:
                 "clear_history": self.history.clear,
                 "setting": self._apply_setting,
                 "transform": self._start_transform,
+                "last_text": self._last_text,
+                "learn": self._learn_correction,
             },
         )
         self.overlay = Overlay(self.config.ui)
@@ -169,6 +173,38 @@ class OpenFlowApp:
             return qt_app.exec()
         finally:
             self.shutdown()
+
+    # -- corrections -------------------------------------------------------
+    def _last_text(self) -> str:
+        """What we inserted last, for the "Fix last" button.
+
+        Read from memory rather than history, so correcting works even with
+        ``log_transcripts`` off -- the privacy default should not quietly
+        disable the feature that makes dictation get better.
+        """
+        return self._last_insertion[1] if self._last_insertion else ""
+
+    def _learn_correction(self, original: str, corrected: str) -> list:
+        """Record a hand-correction and push what it teaches upstream.
+
+        Two destinations, because a correction answers two different questions.
+        The store replays the fix on future transcripts; ``promote`` turns a
+        single-word name fix into a dictionary term, which rides along in the
+        recognition prompt and stops the error being made in the first place.
+        """
+        learned = self.corrections.learn(original, corrected)
+        if not learned:
+            return []
+        promoted = self.corrections.promote(self.personal)
+        if promoted:
+            log.info("promoted to dictionary: %s", ", ".join(promoted))
+        # Keep "fix last" idempotent: a second pass should diff against what
+        # the user just said was right, not against the text they replaced.
+        if self._last_insertion and self._last_insertion[1] == original:
+            raw, _cleaned, record_id, at = self._last_insertion
+            self._last_insertion = (raw, corrected, record_id, at)
+        log.info("learned %d correction(s) from a hand edit", len(learned))
+        return learned
 
     # -- undo --------------------------------------------------------------
     def _on_hotkey_undo(self) -> None:
@@ -621,6 +657,9 @@ class OpenFlowApp:
 
         result = self.cleaner.clean(transcript.text)
         final = self.personal.apply(result.text)
+        # Replay what the user has already taught us. Last, so a correction
+        # always wins: it is the one edit we know this speaker made by hand.
+        final = self.corrections.apply(final)
 
         if self.config.profiles.enabled:
             profile = profile_for(self._target_app, self.config.profiles.apps)

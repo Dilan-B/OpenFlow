@@ -13,9 +13,15 @@ from ..config import Config
 from ..text.cleaner import CleanResult, RuleBasedCleaner
 from .base import ProviderError
 from .providers import build_provider, system_prompt_for
-from .quota import QuotaLedger
+from .quota import QuotaLedger, is_daily_exhaustion
 
 log = logging.getLogger(__name__)
+
+# Groq serves both transcription and cleanup, on separate free-tier
+# allowances. The ledger is keyed by name, so the cleanup backend needs its own
+# key -- otherwise a day of cleanup requests would exhaust the counter that
+# gates cloud *transcription*, which is the more valuable of the two.
+QUOTA_KEY = {"groq": "groq_chat"}
 
 
 class LLMCleaner:
@@ -65,8 +71,9 @@ class LLMCleaner:
                 result.latency_ms = (time.perf_counter() - started) * 1000
                 return result
 
-            limit = self.config.llm.daily_limits.get(name)
-            if not self.quota.has_headroom(name, limit):
+            quota_key = QUOTA_KEY.get(name, name)
+            limit = self.config.llm.daily_limits.get(quota_key)
+            if not self.quota.has_headroom(quota_key, limit):
                 log.info("%s over daily free-tier limit; falling through", name)
                 continue
 
@@ -86,11 +93,11 @@ class LLMCleaner:
                 out = provider.complete(system_prompt_for(provider), candidate)
             except ProviderError as exc:
                 log.warning("%s failed (%s); falling through", name, exc)
-                if limit and "429" in str(exc):
-                    self.quota.exhaust(name, limit)
+                if limit and "429" in str(exc) and is_daily_exhaustion(str(exc)):
+                    self.quota.exhaust(quota_key, limit)
                 continue
 
-            self.quota.record(name)
+            self.quota.record(quota_key)
             return CleanResult(
                 text=out,
                 raw=raw,

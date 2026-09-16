@@ -27,6 +27,36 @@ class SttError(RuntimeError):
     pass
 
 
+def vocabulary_prompt() -> str:
+    """The recognition hint: keep it verbatim, and here are the hard words.
+
+    Whisper reads its prompt as preceding context, which biases the decoder
+    toward the spellings it contains. This is the only lever that fixes a name
+    *before* it is mis-heard -- everything downstream is repair work on a word
+    the model already got wrong, and repair cannot recover a name it has never
+    seen. So both sources of known terms go in: the user's dictionary, and the
+    names they have corrected by hand.
+
+    The budget is chosen against Whisper's 224-token prompt window. ~400
+    characters of comma-separated terms is roughly 100 tokens, which leaves
+    the window comfortably clear while carrying several times the terms the
+    previous 180-character budget allowed.
+    """
+    prompt = "Transcribe verbatim, including false starts and filler words."
+    from ..corrections import shared as corrections
+    from ..personalization import shared
+
+    terms = shared().vocabulary_hint(budget=400)
+    learned = ", ".join(
+        entry.after for entry in corrections().active()
+        if len(entry.after.split()) <= 2
+    )[:200]
+    vocab = ", ".join(part for part in (terms, learned) if part)
+    if vocab:
+        prompt += f" Vocabulary: {vocab}."
+    return prompt
+
+
 def to_wav_bytes(audio, sample_rate: int) -> bytes:
     """Encode float32 mono samples as 16-bit PCM WAV in memory."""
     import numpy as np
@@ -60,15 +90,7 @@ class GroqWhisper:
         if not self.key:
             raise SttError("GROQ_API_KEY is not set")
         wav = to_wav_bytes(audio, sample_rate)
-        # Whisper treats the prompt as a style/vocabulary hint. Two jobs here:
-        # keep it verbatim (cleanup is the LLM's job), and bias recognition
-        # toward the user's dictionary terms so "Groq" doesn't become "grok".
-        prompt = "Transcribe verbatim, including false starts and filler words."
-        from ..personalization import shared
-
-        vocab = shared().vocabulary_hint()
-        if vocab:
-            prompt += f" Vocabulary: {vocab}."
+        prompt = vocabulary_prompt()
         body, content_type = _multipart(
             fields={
                 "model": self.cfg.stt.groq_model,
@@ -144,6 +166,9 @@ class FasterWhisper:
             beam_size=1,            # greedy: latency beats marginal accuracy here
             vad_filter=True,
             condition_on_previous_text=False,
+            # Same vocabulary bias the cloud path gets. Names are exactly where
+            # a small local model is weakest, so the hint matters most here.
+            initial_prompt=vocabulary_prompt(),
         )
         return " ".join(segment.text.strip() for segment in segments).strip()
 
