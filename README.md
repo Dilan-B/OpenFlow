@@ -124,7 +124,7 @@ Measured on this machine, same 3.9 s utterance, all producing identical text:
 | speech-to-text | Groq Whisper (cloud) | **341 ms** |
 | speech-to-text | Parakeet int8 (local) | 532 ms |
 | cleanup | rules (deterministic) | **0.1 ms** |
-| cleanup | Groq gpt-oss-20b | **237 ms** |
+| cleanup | Groq qwen3.8-27b | **~215 ms** |
 | cleanup | Gemini flash-lite | 585 ms |
 | cleanup | Ollama llama3.1:8b | 2,700 ms |
 
@@ -379,7 +379,7 @@ Writes `~/.openflow/config.json`. Notable keys:
 | `stt.moonshine_arch` | `TINY`, `BASE`, `SMALL_STREAMING`, `MEDIUM_STREAMING` |
 | `llm.enabled` | master switch for the AI cleanup pass — on by default (see below) |
 | `llm.backends` | fallback order: `groq`, `gemini`, `ollama`, `rules` |
-| `llm.groq_model` | cleanup model on Groq's free tier (default `openai/gpt-oss-20b`) |
+| `llm.groq_model` | cleanup model on Groq's free tier (default `qwen/qwen3.8-27b`) |
 | `llm.only_when_uncertain` | call the model only where the rules pass flagged itself unsure — off by default |
 | `llm.daily_limits` | free-tier request ceilings per provider per day |
 | `llm.hourly_audio_seconds` | rolling audio-duration ceiling (Groq: 7200/hour) |
@@ -392,6 +392,39 @@ current transcription optimizations and free-tier APIs, with four concrete
 recommended changes (Parakeet-via-ONNX as the local backend, Moonshine for
 short utterances, corrected Groq quota numbers, and a transcript-containment
 guard against LLM hallucination).
+
+## Cleanup that matches Wispr Flow
+
+The AI pass is tuned to behave like Wispr Flow's documented editing
+([Smart Formatting & Backtrack](https://docs.wisprflow.ai/articles/5373093536-how-do-i-use-smart-formatting-and-backtrack)):
+
+- **Only deletes.** Fillers (um, uh, and "like" / "you know" / "I mean" when
+  they are filler), stutters, false starts and self-corrections go. Word choice,
+  slang and phrasing stay exactly as spoken — "gonna" is not "going to".
+- **Backtrack keeps the sentence.** A corrected detail is swapped in place:
+  "let's do coffee at 2 actually 3" → "Let's do coffee at 3". A restatement with
+  no trigger word works too: "a record as a gift as a present" → "a record as a
+  present". "Scratch that" and "never mind" drop everything before them.
+- **Trigger words used for real survive.** "I actually enjoyed it", "sorry for
+  the delay", "no, that won't work", "you know the answer", "I mean it".
+
+That behaviour is pinned by `tests/corpus/wispr_cases.json` — Wispr's own
+documented examples plus one case per documented rule. The current default
+scores **23/23** on it, on two separate runs:
+
+```
+python -m tests.harness --corpus wispr --cleaner groq --delay 8
+```
+
+`--delay` keeps the run under Groq's free-tier tokens-per-minute cap; without
+it, cases fall back to another backend and the harness warns that the score no
+longer describes the model named.
+
+The model is handed the transcript *before* the rules pass trims it. The
+containment guard forbids the model from adding words, so a model given
+already-trimmed text could never restore a word the rules got wrong — which is
+how "can we meet Tuesday at five, or actually make it Friday at three" used to
+come back as "Make it Friday at three."
 
 ## Learning from your corrections
 

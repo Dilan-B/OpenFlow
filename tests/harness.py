@@ -9,6 +9,7 @@ tell whether a prompt change to an 8B local model actually helped.
     python -m tests.harness --cleaner ollama    # local Llama 3.1 / Gemma 2
     python -m tests.harness --cleaner gemini    # Google AI Studio free tier
     python -m tests.harness --tag slot-patch -v
+    python -m tests.harness --corpus wispr --cleaner groq --delay 2
 """
 
 from __future__ import annotations
@@ -26,6 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from openflow.text.cleaner import Cleaner, RuleBasedCleaner  # noqa: E402
 
 CORPUS_PATH = Path(__file__).parent / "corpus" / "stem_cases.json"
+# Named corpora for --corpus. "wispr" encodes Wispr Flow's documented trimming
+# behaviour; see the description inside the file.
+CORPORA = {
+    "stem": CORPUS_PATH,
+    "wispr": Path(__file__).parent / "corpus" / "wispr_cases.json",
+}
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
@@ -49,6 +56,7 @@ class Outcome:
     exact: bool
     normalized: bool
     latency_ms: float
+    engine: str = ""
 
 
 def load_corpus(path: Path = CORPUS_PATH) -> list[Case]:
@@ -71,11 +79,17 @@ def normalize(text: str) -> str:
     return _WS_RE.sub(" ", _PUNCT_RE.sub("", text.lower())).strip()
 
 
-def run(cleaner: Cleaner, cases: list[Case]) -> list[Outcome]:
+def run(cleaner: Cleaner, cases: list[Case], delay_s: float = 0.0) -> list[Outcome]:
     outcomes: list[Outcome] = []
-    for case in cases:
+    for index, case in enumerate(cases):
+        # Free tiers limit tokens per minute. Without pacing, a run 429s partway
+        # and the LLM cleaner quietly answers with the rules pass -- so the score
+        # stops describing the model it claims to.
+        if delay_s and index:
+            time.sleep(delay_s)
         started = time.perf_counter()
-        actual = cleaner.clean(case.input).text
+        result = cleaner.clean(case.input)
+        actual = result.text
         elapsed = (time.perf_counter() - started) * 1000
         outcomes.append(
             Outcome(
@@ -84,6 +98,7 @@ def run(cleaner: Cleaner, cases: list[Case]) -> list[Outcome]:
                 exact=actual == case.expected,
                 normalized=normalize(actual) == normalize(case.expected),
                 latency_ms=elapsed,
+                engine=getattr(result, "engine", ""),
             )
         )
     return outcomes
@@ -124,7 +139,15 @@ def report(outcomes: list[Outcome], engine: str, verbose: bool) -> bool:
         print(f"    {tag:<12} {hits}/{len(group)}")
 
     pct = 100 * exact / total if total else 0.0
-    print(f"\n  exact {exact}/{total} ({pct:.0f}%)   normalized {near}/{total}\n")
+    print(f"\n  exact {exact}/{total} ({pct:.0f}%)   normalized {near}/{total}")
+    # A case the named backend never answered is not evidence about it.
+    if engine != "rules":
+        fell_back = [o.case.id for o in outcomes
+                     if o.engine and o.engine not in (engine, "noop")]
+        if fell_back:
+            print(f"  {YELLOW}warning{RESET}: {len(fell_back)} case(s) answered by a "
+                  f"fallback, not {engine}: {', '.join(fell_back)}")
+    print()
     return exact == total
 
 
@@ -146,9 +169,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="only run cases carrying this tag (repeatable)")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="show input/expected/actual for passing cases too")
+    parser.add_argument("--corpus", default="stem", choices=sorted(CORPORA),
+                        help="which golden corpus to score (default: stem)")
+    parser.add_argument("--delay", type=float, default=0.0,
+                        help="seconds between cases, to stay under free-tier rate limits")
     args = parser.parse_args(argv)
 
-    cases = load_corpus()
+    cases = load_corpus(CORPORA[args.corpus])
     if args.tag:
         wanted = set(args.tag)
         cases = [c for c in cases if wanted & set(c.tags)]
@@ -157,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     cleaner = build_cleaner(args.cleaner)
-    ok = report(run(cleaner, cases), args.cleaner, args.verbose)
+    ok = report(run(cleaner, cases, args.delay), args.cleaner, args.verbose)
     return 0 if ok else 1
 
 

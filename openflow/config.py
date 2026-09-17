@@ -19,7 +19,7 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 # time. Without this, a config written on day one pins every default it ever
 # saw -- which is how an install kept transcribing with whisper-large-v3-turbo
 # and the cleanup pass switched off, months after both defaults had changed.
-SCHEMA = 1
+SCHEMA = 2
 
 
 @dataclass(slots=True)
@@ -104,20 +104,32 @@ class LlmConfig:
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
     # Groq's OpenAI-compatible chat endpoint, reusing GROQ_API_KEY.
-    # Measured with scripts/bench_cleanup.py: gpt-oss-20b 287 ms/call,
-    # qwen3.8-27b 201 ms, gpt-oss-120b 438 ms. On the golden corpus all three
-    # were 29/29 normalized. gpt-oss-20b wins the default on two things the
-    # latency number does not show: reasoning_effort is controllable (a
-    # reasoning model that leaks its thinking fails the containment guard and
-    # costs a wasted round-trip), and it has the larger free-tier token budget
-    # -- 8,000 tokens/minute against qwen's 7,000 input tokens/minute.
     #
-    # That budget, not the request count, is the real ceiling: the system
-    # prompt runs several hundred tokens, so sustained rapid-fire dictation can
-    # hit tokens-per-minute long before the daily request cap. Crossing it is a
-    # soft failure -- the request 429s and the deterministic pass answers
-    # instead -- but it is why only_when_uncertain exists as an escape hatch.
-    groq_model: str = "openai/gpt-oss-20b"
+    # qwen3.8-27b, chosen on the Wispr Flow parity corpus
+    # (tests/corpus/wispr_cases.json), two full runs per model, paced so no
+    # case fell back to another backend:
+    #
+    #   qwen3.8-27b          wispr 23/23, 23/23   stem 26, 27/29   ~215 ms
+    #   gpt-oss-120b (low)   wispr 21/23, 21/23   stem 22, 23/29   ~365 ms
+    #   gpt-oss-20b  (low)   wispr 19/23, 21/23   stem 24, 25/29   ~275 ms
+    #   gpt-oss-20b  (med)   wispr 21/23          -                ~430 ms
+    #
+    # Best and fastest, and it answers without hidden reasoning tokens -- 7
+    # completion tokens for a short dictation. gpt-oss's losses were the
+    # Wispr-defining cases: keeping the *later* phrasing of a restatement, and
+    # keeping "no" when it is an answer rather than a correction.
+    #
+    # Free tier: 1,000 requests/day and 8,000 tokens/minute. A request is
+    # ~1,100 tokens with the prompt and few-shot pairs, so sustained rapid
+    # dictation can hit the per-minute cap; the request then falls through to
+    # the next backend rather than failing. gpt-oss-20b also caps tokens per
+    # *day* (200,000), which this model does not.
+    groq_model: str = "qwen/qwen3.8-27b"
+    # gpt-oss only: how much the model reasons before answering. Reasoning
+    # tokens are latency on the dictation path, but backtracking ("which
+    # phrasing did the speaker keep?") is exactly the kind of edit that goes
+    # wrong without any. See scripts/bench_cleanup.py.
+    groq_reasoning_effort: str = "low"
     # An alias, not a pinned version: pinned names retire. A config saved
     # before this default changed keeps the old name forever, which is how
     # a dead gemini-1.5-flash can outlive the code that stopped naming it.
@@ -290,6 +302,13 @@ def _migrate(cfg: "Config") -> None:
         for key, value in LlmConfig().daily_limits.items():
             cfg.llm.daily_limits.setdefault(key, value)
         cfg.schema = 1
+    if cfg.schema < 2:
+        # Wispr-parity scoring retired gpt-oss-20b as the cleanup default. A
+        # config still naming it got it from the old default, not from a
+        # choice -- nothing in the UI ever offered a cleanup model.
+        if cfg.llm.groq_model == "openai/gpt-oss-20b":
+            cfg.llm.groq_model = LlmConfig().groq_model
+        cfg.schema = 2
 
 
 def _apply(target, data: dict) -> None:

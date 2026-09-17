@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .literal_use import is_literal_use
 from .pivots import (
     CLAUSE_STARTERS,
     MERIDIEMS,
@@ -76,6 +77,8 @@ def _find_pivot(tokens: list[Token], start: int) -> tuple[int, int, str] | None:
         best: tuple[int, str] | None = None
         for phrase in STRONG_PIVOTS:
             end = match_phrase(tokens, i, phrase)
+            if end != -1 and is_literal_use(tokens, i, end, phrase):
+                continue
             if end != -1 and (best is None or end > best[0]):
                 best = (end, " ".join(phrase))
         if best is not None:

@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from openflow.config import Config  # noqa: E402
+from openflow.config import SCHEMA, Config  # noqa: E402
 from openflow.corrections import (  # noqa: E402
     AUTO_APPLY_COUNT, Corrections, diff_corrections,
 )
@@ -173,7 +173,8 @@ class ConfigMigration(unittest.TestCase):
         self.assertTrue(cfg.llm.enabled)
         self.assertFalse(cfg.llm.only_when_uncertain)
         self.assertEqual(cfg.llm.backends[0], "groq")
-        self.assertEqual(cfg.schema, 1)
+        # Migrations chain: an old file is carried all the way forward.
+        self.assertEqual(cfg.schema, SCHEMA)
 
     def test_moves_off_the_turbo_transcription_model(self):
         cfg = Config.load(self._write({"stt": {"groq_model": "whisper-large-v3-turbo"}}))

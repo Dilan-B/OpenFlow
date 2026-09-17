@@ -7,6 +7,7 @@ discourse-marker position -- comma-adjacent or clause-initial.
 
 from __future__ import annotations
 
+from .literal_use import is_literal_use
 from .pivots import CLAUSE_CONNECTIVES, HARD_FILLERS, SOFT_FILLERS
 from .tokens import Token, detokenize, match_phrase, tokenize
 
@@ -35,11 +36,15 @@ def strip_fillers(text: str) -> tuple[str, list[str]]:
         hit: tuple[int, str] | None = None
         for phrase in HARD_FILLERS:
             end = match_phrase(tokens, i, phrase)
+            if end != -1 and is_literal_use(tokens, i, end, phrase):
+                continue
             if end != -1 and (hit is None or end > hit[0]):
                 hit = (end, " ".join(phrase))
         if hit is None:
             for phrase in SOFT_FILLERS:
                 end = match_phrase(tokens, i, phrase)
+                if end != -1 and is_literal_use(tokens, i, end, phrase):
+                    continue
                 if end != -1 and _is_discourse_position(tokens, i, end):
                     if hit is None or end > hit[0]:
                         hit = (end, " ".join(phrase))

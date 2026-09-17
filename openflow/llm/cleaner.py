@@ -10,7 +10,9 @@ import logging
 import time
 
 from ..config import Config
-from ..text.cleaner import CleanResult, RuleBasedCleaner
+from ..text.cleaner import (
+    CleanResult, RuleBasedCleaner, finish_model_output, prepare_for_model,
+)
 from .base import ProviderError
 from .providers import build_provider, system_prompt_for
 from .quota import QuotaLedger, is_daily_exhaustion
@@ -48,8 +50,13 @@ class LLMCleaner:
         if not text:
             return CleanResult(text="", raw=raw, engine="noop")
 
+        # The rules pass still runs first: it is the answer when every model
+        # declines, and its retraction analysis feeds the uncertainty gate.
+        # But its *output* is not what the model edits -- see
+        # prepare_for_model for why a model must see the words the rules
+        # would have deleted.
         prepass = self.rules.clean(text) if self.config.llm.rules_prepass else None
-        candidate = prepass.text if prepass else text
+        candidate = prepare_for_model(text)
 
         if not self.config.llm.enabled:
             result = prepass or self.rules.clean(text)
@@ -88,8 +95,6 @@ class LLMCleaner:
                 continue
 
             try:
-                # The LLM sees the rules-cleaned text: fewer tokens, and a
-                # small local model has less room to wander.
                 out = provider.complete(system_prompt_for(provider), candidate)
             except ProviderError as exc:
                 log.warning("%s failed (%s); falling through", name, exc)
@@ -98,12 +103,14 @@ class LLMCleaner:
                 continue
 
             self.quota.record(quota_key)
+            out, symbol_fixes = finish_model_output(out)
             return CleanResult(
                 text=out,
                 raw=raw,
                 retractions=prepass.retractions if prepass else [],
                 fillers_removed=prepass.fillers_removed if prepass else [],
                 repetitions_collapsed=prepass.repetitions_collapsed if prepass else [],
+                autofixes=symbol_fixes,
                 engine=name,
                 latency_ms=(time.perf_counter() - started) * 1000,
             )
