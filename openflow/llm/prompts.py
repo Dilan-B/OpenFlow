@@ -37,6 +37,8 @@ KEEP:
 - Discourse words that open or join sentences: "so", "well", "and", "but", "okay", "anyway". These are not filler.
 - Every detail that was not corrected away.
 - Names, technical terms and their capitalization.
+- Spoken list markers and numbers exactly as words: "one", "two", "first", "second", "seven thirty". Formatting into lists and digits happens after you.
+- Symbols and line breaks already in the text: @ # % & / _ ( ) and new lines.
 
 FORMAT:
 - Capitalize sentences. Add periods and commas where the speech implies them.

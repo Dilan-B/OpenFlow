@@ -9,7 +9,7 @@ jargon. It works on two fronts --
      "open flow" / "openflo" -> "OpenFlow", "grok" -> "Groq".
 
 Snippets expand a spoken trigger into saved text ("my email sig" -> the whole
-signature). Styles append a tone instruction to the LLM cleanup prompt.
+signature). Styles now live in formatting.py as Wispr-style Flow Styles.
 
 All of it lives in ~/.openflow/personalization.json.
 """
@@ -26,25 +26,11 @@ from .config import CONFIG_DIR
 
 _WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9']*")
 
-STYLES: dict[str, str] = {
-    "default": "",
-    "professional": (
-        "STYLE: The speaker wants polished professional prose. Prefer complete "
-        "sentences and neutral wording, but change no facts and add no content."
-    ),
-    "casual": (
-        "STYLE: Keep the speaker's casual, conversational tone exactly as is. "
-        "Do not formalize their wording."
-    ),
-    "concise": (
-        "STYLE: The speaker wants brevity. You may drop redundant qualifiers "
-        "and repeated phrases, but never drop information."
-    ),
-    "email": (
-        "STYLE: This dictation is an email body. Break it into short paragraphs "
-        "at topic changes. Change no wording."
-    ),
-}
+# Styles moved to Flow Styles (formatting.py, config.formatting.styles): per
+# app category, capitalization and punctuation only. The old presets here asked
+# the cleanup model to reword, which delete-only cleanup no longer permits.
+# ``style`` is still read and written so an older file round-trips intact.
+STYLES: tuple[str, ...] = ("default", "professional", "casual", "concise", "email")
 
 
 @dataclass(slots=True)
@@ -78,7 +64,7 @@ class Personalization:
                 for s in data.get("snippets", [])
                 if s.get("trigger")
             ]
-            if data.get("style") in STYLES:
+            if data.get("style") in STYLES:  # legacy, see STYLES
                 inst.style = data["style"]
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             pass
@@ -161,15 +147,6 @@ class Personalization:
             if spoken == _norm(snippet.trigger):
                 return snippet.text
         return text
-
-    # -- style -------------------------------------------------------------
-    def set_style(self, name: str) -> None:
-        if name in STYLES:
-            self.style = name
-            self.save()
-
-    def style_instruction(self) -> str:
-        return STYLES.get(self.style, "")
 
     # -- the full post-pass ------------------------------------------------
     def apply(self, text: str) -> str:

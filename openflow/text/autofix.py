@@ -81,7 +81,19 @@ PROPER_NOUNS = {
 # Spoken symbols. Multi-word first so "at sign" beats a bare "at".
 # ---------------------------------------------------------------------------
 SPOKEN_SYMBOLS: tuple[tuple[str, str], ...] = (
-    (r"\bat sign\b", "@"),
+    # Wispr Flow's documented symbol vocabulary. Multi-word names first, so
+    # "registered trademark symbol" is not eaten by "trademark symbol".
+    (r"\bdegrees? celsius\b", "°C"),
+    (r"\bdegrees? fahrenheit\b", "°F"),
+    (r"\bdegrees? (?:sign|symbol)\b", "°"),
+    (r"\bregistered trademark (?:sign|symbol)\b", "®"),
+    (r"\btrademark (?:sign|symbol)\b", "™"),
+    (r"\bcopyright (?:sign|symbol)\b", "©"),
+    (r"\b(?:open|left) angle bracket\b", "<"),
+    (r"\b(?:close|right) angle bracket\b", ">"),
+    (r"\b(?:open|left) (?:square )?bracket\b", "["),
+    (r"\b(?:close|right) (?:square )?bracket\b", "]"),
+    (r"\bat (?:sign|symbol)\b", "@"),
     (r"\bhash ?tag\b", "#"),
     (r"\bpound sign\b", "#"),
     (r"\bdollar sign\b", "$"),
@@ -89,12 +101,30 @@ SPOKEN_SYMBOLS: tuple[tuple[str, str], ...] = (
     (r"\bampersand\b", "&"),
     (r"\basterisk\b", "*"),
     (r"\bplus sign\b", "+"),
-    (r"\bequals sign\b", "="),
+    (r"\bminus sign\b", "-"),
+    (r"\bequals? sign\b", "="),
     (r"\bforward slash\b", "/"),
     (r"\bback ?slash\b", "\\"),
+    (r"\bslash\b", "/"),
+    (r"\bunderscore\b", "_"),
+    (r"\btilde\b", "~"),
+    (r"\bapostrophe\b", "'"),
+    (r"\bsingle quote\b", "'"),
     (r"\bopen paren(?:thesis)?\b", "("),
     (r"\bclose paren(?:thesis)?\b", ")"),
+    (r"\b(?:open|left) parentheses\b", "("),
+    (r"\b(?:close|right) parentheses\b", ")"),
 )
+
+# How each symbol sits against its neighbours once substituted. Spoken
+# dictation puts a space on both sides of every word, which is right for "&"
+# and wrong for nearly everything else: "john_smith", "#launch", "50%".
+_JOIN_BOTH = re.compile(r"\s*([_/\\])\s*")
+_JOIN_NEXT = re.compile(r"([#~(\[$])\s+")
+_JOIN_PREV = re.compile(r"\s+(°[CF]|[%°™®)\]])")
+# "@" joins its handle, and joins both sides only inside an email address.
+_AT_EMAIL = re.compile(r"(\w)\s*@\s*(\w[\w-]*\.\w)")
+_AT_HANDLE = re.compile(r"@\s+(\w)")
 
 _WORD = r"[A-Za-z0-9_-]+"
 # "john dot smith at gmail dot com" -> john.smith@gmail.com
@@ -190,11 +220,19 @@ def apply_symbol_fixes(text: str) -> tuple[str, int]:
         else f"{m.group(1).lower()}.{m.group(2).lower()}", text)
     fixes += n
 
+    symbols = 0
     for pattern, symbol in SPOKEN_SYMBOLS:
         # Substitute through a callable: re treats a backslash in a template
         # replacement as an escape, so a literal "\" is a pattern error.
         text, n = re.subn(pattern, lambda _m, s=symbol: s, text, flags=re.IGNORECASE)
-        fixes += n
+        symbols += n
+    if symbols:
+        fixes += symbols
+        text = _JOIN_BOTH.sub(r"\1", text)
+        text = _JOIN_NEXT.sub(r"\1", text)
+        text = _JOIN_PREV.sub(r"\1", text)
+        text = _AT_EMAIL.sub(r"\1@\2", text)
+        text = _AT_HANDLE.sub(r"@\1", text)
 
     text, n = _SPLIT_TIME_RE.subn(
         lambda m: f"{m.group(1)}:{m.group(2)} {m.group(3).upper()}M", text)
