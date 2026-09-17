@@ -214,7 +214,7 @@ class GroqProvider:
         if not self.key:
             raise ProviderError("GROQ_API_KEY is not set")
         messages: list[dict] = [{"role": "system", "content": system}]
-        for example_in, example_out in FEW_SHOT[:2]:
+        for example_in, example_out in FEW_SHOT:
             messages.append({"role": "user", "content": example_in})
             messages.append({"role": "assistant", "content": example_out})
         messages.append({"role": "user", "content": user})
@@ -229,7 +229,7 @@ class GroqProvider:
         # gpt-oss models reason before answering. Editing a sentence needs none
         # of it, and the tokens are pure latency on the dictation path.
         if "gpt-oss" in self.model:
-            payload["reasoning_effort"] = "low"
+            payload["reasoning_effort"] = self.cfg.groq_reasoning_effort
 
         data = _post(
             self.url,

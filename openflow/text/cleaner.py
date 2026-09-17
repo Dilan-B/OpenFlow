@@ -41,6 +41,38 @@ class CleanResult:
         return any(r.strategy == "keep-both" for r in self.retractions)
 
 
+def prepare_for_model(raw: str) -> str:
+    """The non-destructive half of the rules pass, for a model to edit.
+
+    A model given the *finished* rules output cannot put back a word the rules
+    wrongly deleted -- the containment guard forbids words absent from its
+    input. That is how "you know the answer already" reached the screen as
+    "The answer already", and "can we meet Tuesday at five, or actually make it
+    Friday at three" as "Make it Friday at three": each was a deletion the
+    model would not have made, handed to it as a fait accompli.
+
+    So the model gets only the steps that remove nothing: spoken punctuation
+    ("new paragraph" must be a command, not two words to trim) and unambiguous
+    word repairs ("dont" -> "don't"). Every deletion is the model's decision.
+    """
+    text = normalize_whitespace(raw)
+    if not text:
+        return ""
+    text = apply_spoken_punctuation(text)
+    text, _fixes = apply_word_fixes(text)
+    return text
+
+
+def finish_model_output(text: str) -> tuple[str, int]:
+    """Symbol repairs ("at gmail dot com") after the model has edited.
+
+    These run last in the rules pass for the same reason they run after the
+    model here: they introduce '.', '@' and ':', which read as sentence
+    boundaries to anything still editing the text.
+    """
+    return apply_symbol_fixes(text)
+
+
 @runtime_checkable
 class Cleaner(Protocol):
     name: str

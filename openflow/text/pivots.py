@@ -71,6 +71,42 @@ SOFT_FILLERS: tuple[tuple[str, ...], ...] = (
 )
 
 # --------------------------------------------------------------------------
+# Literal uses of pivot/filler phrases
+# --------------------------------------------------------------------------
+# "you know" and "I mean" are fillers in "it's, you know, flaky" and verbs in
+# "you know the answer" / "I mean it". Deleting the verb reading destroys the
+# sentence ("The answer already.", "It this time."), which is far worse than
+# leaving a filler in -- so these tables err toward reading a verb.
+#
+# Words that, directly after "I mean" / "I meant", make it the verb. "the" is
+# deliberately absent: "the fifth, I mean the sixth" is the commonest
+# correction there is.
+MEAN_OBJECTS = frozenset({
+    "it", "that", "this", "what", "to", "business", "well", "no", "you",
+    "him", "her", "them", "every", "exactly", "everything", "anything",
+    "nothing", "something", "for", "by", "any", "literally", "seriously",
+})
+
+# Words that, directly after a sentence-initial "you know", make it the verb:
+# "You know the answer", "You know what, let's go". Subject pronouns are left
+# out -- "you know, I think we should" is the filler reading far more often.
+KNOW_OBJECTS = frozenset({
+    "the", "a", "an", "that", "this", "these", "those", "what", "how", "why",
+    "where", "who", "when", "whether", "it", "him", "her", "them", "me", "us",
+    "my", "your", "his", "our", "their", "about", "exactly", "everything",
+    "nothing", "something", "anything", "more", "better", "each", "all",
+    "both", "enough", "plenty", "nobody", "everyone", "someone",
+})
+
+# Words that, directly before "you know", make it the verb wherever it is:
+# "do you know", "if you know", "as you know".
+KNOW_LEADERS = frozenset({
+    "do", "does", "did", "don't", "didn't", "if", "as", "when", "because",
+    "whether", "since", "what", "how", "now", "unless", "until", "once",
+    "cause", "'cause", "whatever", "everything", "all", "that",
+})
+
+# --------------------------------------------------------------------------
 # Slot typing -- used to splice a fragment replacement onto the retained head.
 # "Let's meet Tuesday at 5, actually Friday at 3."
 #   tail slots = {date, time}  ->  drop "Tuesday" and "at 5" from the head.

@@ -1,0 +1,151 @@
+{
+  "description": "Wispr Flow parity corpus for sentence trimming and word removal. Cases tagged wispr-doc are the documented examples from Wispr's help center (docs.wisprflow.ai, 'How do I use Smart Formatting & Backtrack'). The rest encode the documented rules: Backtrack keeps the sentence frame and replaces only what was corrected; non-corrective uses of trigger words survive; fillers, stutters and false starts go; word choice and phrasing are never changed. Graded on normalized match (words), since Wispr's own examples are inconsistent about the final full stop.",
+  "cases": [
+    {
+      "id": "wispr-doc-coffee",
+      "tags": ["wispr-doc", "backtrack", "slot"],
+      "input": "let's do coffee at 2 actually 3",
+      "expected": "Let's do coffee at 3.",
+      "note": "Documented Backtrack example. The frame 'Let's do coffee at' survives; only the corrected slot is replaced."
+    },
+    {
+      "id": "wispr-doc-restatement",
+      "tags": ["wispr-doc", "backtrack", "restatement"],
+      "input": "I wanted to buy a record as a gift as a present",
+      "expected": "I wanted to buy a record as a present.",
+      "note": "Documented natural-restatement example: no trigger word, the speaker just says it again differently."
+    },
+    {
+      "id": "wispr-doc-actually-kept",
+      "tags": ["wispr-doc", "preserve"],
+      "input": "I actually enjoyed the movie",
+      "expected": "I actually enjoyed the movie.",
+      "note": "Documented: 'actually' used non-correctively must survive."
+    },
+    {
+      "id": "wispr-wait-no-slot",
+      "tags": ["backtrack", "slot"],
+      "input": "let's meet tuesday wait no friday",
+      "expected": "Let's meet Friday."
+    },
+    {
+      "id": "wispr-slot-keeps-frame",
+      "tags": ["backtrack", "slot"],
+      "input": "can we meet tuesday at five or actually make it friday at three",
+      "expected": "Can we meet Friday at three?",
+      "note": "Regression: the model used to return 'Make it Friday at three', throwing away the frame. Wispr keeps the frame and swaps the slot."
+    },
+    {
+      "id": "wispr-i-mean-slot",
+      "tags": ["backtrack", "slot"],
+      "input": "the meeting is on the fifth I mean the sixth",
+      "expected": "The meeting is on the sixth."
+    },
+    {
+      "id": "wispr-scratch-that-restart",
+      "tags": ["backtrack", "restart"],
+      "input": "send it to john scratch that send it to sarah",
+      "expected": "Send it to Sarah."
+    },
+    {
+      "id": "wispr-never-mind",
+      "tags": ["backtrack", "restart"],
+      "input": "can you grab milk on the way never mind I'll get it",
+      "expected": "I'll get it."
+    },
+    {
+      "id": "wispr-sorry-kept",
+      "tags": ["preserve"],
+      "input": "sorry for the late reply I was out all day",
+      "expected": "Sorry for the late reply, I was out all day.",
+      "note": "'sorry' as an apology is not a correction."
+    },
+    {
+      "id": "wispr-no-answer-kept",
+      "tags": ["preserve"],
+      "input": "no I don't think that works",
+      "expected": "No, I don't think that works."
+    },
+    {
+      "id": "wispr-wait-verb-kept",
+      "tags": ["preserve"],
+      "input": "wait for me at the entrance",
+      "expected": "Wait for me at the entrance."
+    },
+    {
+      "id": "wispr-fillers-um-uh",
+      "tags": ["filler"],
+      "input": "um so we should uh ship it tomorrow",
+      "expected": "So we should ship it tomorrow."
+    },
+    {
+      "id": "wispr-like-filler-mid-clause",
+      "tags": ["filler"],
+      "input": "it was like really slow",
+      "expected": "It was really slow.",
+      "note": "'like' as a filler with no comma around it. The rules pass only removes soft fillers in comma position, so this is the model's job."
+    },
+    {
+      "id": "wispr-like-verb-kept",
+      "tags": ["preserve"],
+      "input": "I like the new design",
+      "expected": "I like the new design."
+    },
+    {
+      "id": "wispr-you-know-filler",
+      "tags": ["filler"],
+      "input": "the build is you know flaky",
+      "expected": "The build is flaky."
+    },
+    {
+      "id": "wispr-you-know-verb-kept",
+      "tags": ["preserve"],
+      "input": "you know the answer already",
+      "expected": "You know the answer already.",
+      "note": "'you know' as subject + verb. A naive hard-filler rule deletes this and leaves 'The answer already.'"
+    },
+    {
+      "id": "wispr-i-mean-it-kept",
+      "tags": ["preserve"],
+      "input": "I mean it this time",
+      "expected": "I mean it this time."
+    },
+    {
+      "id": "wispr-stutters",
+      "tags": ["stutter"],
+      "input": "I I think we we should go",
+      "expected": "I think we should go."
+    },
+    {
+      "id": "wispr-restart-going-to",
+      "tags": ["restart"],
+      "input": "I was going to I'm going to call him tomorrow",
+      "expected": "I'm going to call him tomorrow."
+    },
+    {
+      "id": "wispr-repeated-question-stem",
+      "tags": ["stutter"],
+      "input": "can we can we move the standup",
+      "expected": "Can we move the standup?"
+    },
+    {
+      "id": "wispr-no-rewording-gonna",
+      "tags": ["preserve", "voice"],
+      "input": "gonna grab lunch then head back",
+      "expected": "Gonna grab lunch, then head back.",
+      "note": "Wispr does not change word choice. 'gonna' must not become 'going to'."
+    },
+    {
+      "id": "wispr-no-rewording-hedges",
+      "tags": ["preserve", "voice"],
+      "input": "the results were kinda meh honestly",
+      "expected": "The results were kinda meh, honestly."
+    },
+    {
+      "id": "wispr-combined",
+      "tags": ["backtrack", "filler", "slot"],
+      "input": "um so the demo is on thursday uh actually no wednesday and uh we need the slides by like tuesday",
+      "expected": "So the demo is on Wednesday and we need the slides by Tuesday."
+    }
+  ]
+}

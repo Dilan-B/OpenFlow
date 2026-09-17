@@ -12,7 +12,9 @@ committed to a README months ago.
 Latency is reported as the median of ``--runs`` passes over the sample set, so
 one slow cold start does not decide the ranking. Correctness here is only a
 smoke test -- the real scoring is ``python -m tests.harness --cleaner groq``
-against the golden corpus.
+against the golden corpora, which is what actually picked the default:
+
+    python -m tests.harness --corpus wispr --cleaner groq --delay 8
 """
 
 from __future__ import annotations
@@ -39,9 +41,9 @@ SAMPLES = [
 ]
 
 DEFAULT_MODELS = [
+    "qwen/qwen3.8-27b",
     "openai/gpt-oss-20b",
     "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
 ]
 
 
