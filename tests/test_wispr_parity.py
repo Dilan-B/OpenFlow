@@ -16,7 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from openflow.config import Config  # noqa: E402
+from openflow.config import SCHEMA, Config  # noqa: E402
 from openflow.llm.cleaner import LLMCleaner  # noqa: E402
 from openflow.llm.prompts import FEW_SHOT  # noqa: E402
 from openflow.llm.quota import QuotaLedger  # noqa: E402
@@ -125,7 +125,7 @@ class CleanupModelMigration(unittest.TestCase):
     def test_moves_off_the_retired_default(self):
         cfg = self._load({"schema": 1, "llm": {"groq_model": "openai/gpt-oss-20b"}})
         self.assertEqual(cfg.llm.groq_model, "qwen/qwen3.8-27b")
-        self.assertEqual(cfg.schema, 2)
+        self.assertEqual(cfg.schema, SCHEMA)
 
     def test_leaves_any_other_model_alone(self):
         cfg = self._load({"schema": 1, "llm": {"groq_model": "openai/gpt-oss-120b"}})

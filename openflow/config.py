@@ -19,7 +19,7 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 # time. Without this, a config written on day one pins every default it ever
 # saw -- which is how an install kept transcribing with whisper-large-v3-turbo
 # and the cleanup pass switched off, months after both defaults had changed.
-SCHEMA = 2
+SCHEMA = 3
 
 
 @dataclass(slots=True)
@@ -223,6 +223,27 @@ class ProfileConfig:
 
 
 @dataclass(slots=True)
+class FormattingConfig:
+    """Wispr Flow-style Smart Formatting and Flow Styles. See formatting.py."""
+
+    # Spoken lists, numbers as digits, dropping the trailing period in
+    # messaging apps, and fitting the text to what surrounds the caret.
+    smart: bool = True
+    # Read the few characters around the caret (accessibility API) so a
+    # mid-sentence dictation is lowercased and spaced to fit. Nothing read is
+    # kept; password fields are never read.
+    context_aware: bool = True
+    # App category -> style. formal | casual | very_casual | excited. Formal
+    # everywhere matches what OpenFlow did before styles existed, and is what
+    # Wispr does when no style is chosen.
+    styles: dict[str, str] = field(default_factory=lambda: {
+        "personal": "formal", "work": "formal", "email": "formal", "other": "formal",
+    })
+    # Extra "executable or app name": "category" mappings, over the built-ins.
+    apps: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class CaptureConfig:
     """Opt-in local dataset capture, for building a real evaluation set.
 
@@ -244,6 +265,7 @@ class Config:
     ui: UiConfig = field(default_factory=UiConfig)
     injection: InjectionConfig = field(default_factory=InjectionConfig)
     profiles: ProfileConfig = field(default_factory=ProfileConfig)
+    formatting: FormattingConfig = field(default_factory=FormattingConfig)
     updates: UpdateConfig = field(default_factory=UpdateConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     # Which set of defaults this file was written against. 0 means "predates
@@ -309,6 +331,24 @@ def _migrate(cfg: "Config") -> None:
         if cfg.llm.groq_model == "openai/gpt-oss-20b":
             cfg.llm.groq_model = LlmConfig().groq_model
         cfg.schema = 2
+    if cfg.schema < 3:
+        # The old Style page held LLM tone presets ("professional", "casual")
+        # that asked the model to reword -- which Wispr-parity cleanup and its
+        # containment guard now forbid. Carry the one preset that still means
+        # something, "casual", into the Flow Styles that replaced them.
+        if _legacy_style() == "casual":
+            for category, style in list(cfg.formatting.styles.items()):
+                if style == "formal":
+                    cfg.formatting.styles[category] = "casual"
+        cfg.schema = 3
+
+
+def _legacy_style() -> str:
+    try:
+        data = json.loads((CONFIG_DIR / "personalization.json").read_text(encoding="utf-8"))
+        return str(data.get("style", ""))
+    except (OSError, ValueError):
+        return ""
 
 
 def _apply(target, data: dict) -> None:

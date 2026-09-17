@@ -323,9 +323,6 @@ def system_prompt_for(provider: Provider) -> str:
 
     personal = shared()
     parts = [prompt]
-    style = personal.style_instruction()
-    if style:
-        parts.append(style)
     # Names the speaker uses and corrections they have taught us. Both are
     # about the same failure: the model "fixing" a term it does not recognise.
     names = personal.vocabulary_hint(budget=400)

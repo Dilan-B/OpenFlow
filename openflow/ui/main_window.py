@@ -28,8 +28,12 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..config import CONFIG_DIR, Config
 from ..corrections import shared as corrections
+from ..formatting import (
+    CATEGORIES, CATEGORY_LABELS, STYLE_CAPTIONS, STYLE_LABELS, STYLES_FOR, AppKind,
+    smart_format,
+)
 from ..history import History
-from ..personalization import STYLES, Personalization
+from ..personalization import Personalization
 from . import theme
 
 log = logging.getLogger(__name__)
@@ -50,17 +54,20 @@ NAV = [
     ("scratchpad", "Scratchpad", ""),
 ]
 
-STYLE_PREVIEWS = {
-    "default": ("Your words, untouched",
-                "Can we push the demo to Friday? I want the auth flow in."),
-    "professional": ("Caps + punctuation",
-                     "Could we move the demo to Friday? I would like the auth flow included."),
-    "casual": ("Keeps your tone",
-               "Hey, can we push the demo to Friday? Want the auth flow in."),
-    "concise": ("Trimmed down",
-                "Push demo to Friday — auth flow should be in."),
-    "email": ("Paragraphs for email",
-              "Can we push the demo to Friday?\n\nI want the auth flow included."),
+# One sample per Flow Style category. The Style page runs each through the
+# real formatter, so a preview can never drift from what dictation produces.
+STYLE_SAMPLES = {
+    "personal": "Hey, are you free tonight? Let's grab dinner at seven. I'll book it.",
+    "work": "The build is green. I'll ship it this afternoon.",
+    "email": "Thanks for the update. I'll review the draft and send notes by Friday.",
+    "other": "Finished the report. Sending it over now.",
+}
+
+CATEGORY_EXAMPLES = {
+    "personal": "WhatsApp, Telegram, Discord, Instagram, Messages, Signal",
+    "work": "Slack, Microsoft Teams, Google Chat, LinkedIn",
+    "email": "Gmail, Outlook, Superhuman, Apple Mail",
+    "other": "Everything else: docs, notes, AI chat, code comments",
 }
 
 TRANSFORMS = [
@@ -1151,64 +1158,82 @@ class MainWindow(QMainWindow):
         title = QLabel("Style")
         title.setObjectName("H1")
         layout.addWidget(title)
-        sub = QLabel("How cleanup shapes your words. Applied by the AI engine when "
-                     "one is available; the deterministic pass never rewrites.")
+        sub = QLabel("Pick how dictation looks in each kind of app. Styles change "
+                     "capitalization and punctuation only, never your words.")
         sub.setObjectName("Sub")
         sub.setWordWrap(True)
         layout.addWidget(sub)
 
-        grid = QGridLayout()
-        grid.setSpacing(14)
-        layout.addLayout(grid)
         self._w["style_cards"] = {}
-        palette = (theme.PINK, theme.INDIGO, theme.AMBER_A, theme.TEAL_A, theme.BLUE)
-        for i, name in enumerate(STYLES):
-            caption, example = STYLE_PREVIEWS[name]
-            colour = palette[i % len(palette)]
-            card = QFrame()
-            card.setObjectName("StyleCard")
-            self._w.setdefault("style_colours", {})[name] = colour
-            card.setCursor(Qt.CursorShape.PointingHandCursor)
-            inner = QVBoxLayout(card)
-            inner.setContentsMargins(16, 14, 16, 14)
-            inner.setSpacing(6)
-            head = QLabel(name.capitalize())
-            head.setStyleSheet(
-                f"background: transparent; font-weight: 600; font-size: 14px;"
-                f" color: {colour};")
-            inner.addWidget(head)
-            cap = QLabel(caption)
-            cap.setObjectName("Faint")
-            inner.addWidget(cap)
-            bubble = QFrame()
-            bubble.setObjectName("Bubble")
-            bubble.setStyleSheet(
-                f"#Bubble {{ background: {theme.tint(colour)}; border-radius: 10px; }}")
-            bubble_layout = QVBoxLayout(bubble)
-            bubble_layout.setContentsMargins(12, 10, 12, 10)
-            text = QLabel(example)
-            text.setWordWrap(True)
-            text.setStyleSheet("background: transparent; font-size: 12px;")
-            bubble_layout.addWidget(text)
-            inner.addWidget(bubble)
-            inner.addStretch()
+        palette = {"formal": theme.INDIGO, "casual": theme.TEAL_A,
+                   "very_casual": theme.PINK, "excited": theme.AMBER_A}
+        self._w["style_colours"] = palette
+        for category in CATEGORIES:
+            section = self._card(layout, margins=(18, 14, 18, 16))
+            head = QLabel(CATEGORY_LABELS[category])
+            head.setObjectName("H2")
+            section.addWidget(head)
+            apps = QLabel(CATEGORY_EXAMPLES[category])
+            apps.setObjectName("Faint")
+            apps.setWordWrap(True)
+            section.addWidget(apps)
 
-            card.mousePressEvent = (
-                lambda _event, n=name: self._pick_style(n))  # type: ignore[assignment]
-            grid.addWidget(card, i // 3, i % 3)
-            self._w["style_cards"][name] = card
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            messaging = category in ("personal", "work")
+            for style in STYLES_FOR[category]:
+                colour = palette[style]
+                card = QFrame()
+                card.setObjectName("StyleCard")
+                card.setCursor(Qt.CursorShape.PointingHandCursor)
+                # Share the row equally whatever the text measures, so three
+                # cards never push the last one past the panel edge.
+                card.setMinimumWidth(0)
+                card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+                inner = QVBoxLayout(card)
+                inner.setContentsMargins(14, 12, 14, 12)
+                inner.setSpacing(4)
+                name = QLabel(STYLE_LABELS[style])
+                name.setStyleSheet(
+                    f"background: transparent; font-weight: 600; font-size: 14px;"
+                    f" color: {colour};")
+                inner.addWidget(name)
+                caption = QLabel(STYLE_CAPTIONS[style])
+                caption.setObjectName("Faint")
+                caption.setWordWrap(True)
+                inner.addWidget(caption)
+                bubble = QFrame()
+                bubble.setObjectName("Bubble")
+                bubble.setStyleSheet(
+                    f"#Bubble {{ background: {theme.tint(colour)}; border-radius: 10px; }}")
+                bubble_layout = QVBoxLayout(bubble)
+                bubble_layout.setContentsMargins(10, 8, 10, 8)
+                preview = QLabel(smart_format(
+                    STYLE_SAMPLES[category], kind=AppKind(category, messaging),
+                    style=style))
+                preview.setWordWrap(True)
+                preview.setStyleSheet("background: transparent; font-size: 12px;")
+                bubble_layout.addWidget(preview)
+                inner.addWidget(bubble)
+                inner.addStretch()
+                card.mousePressEvent = (  # type: ignore[assignment]
+                    lambda _event, c=category, st=style: self._pick_style(c, st))
+                row.addWidget(card, 1)
+                self._w["style_cards"][(category, style)] = card
+            section.addLayout(row)
         layout.addStretch()
         self._sync_style()
 
-    def _pick_style(self, name: str) -> None:
-        self.personal.set_style(name)
+    def _pick_style(self, category: str, style: str) -> None:
+        self.cb["setting"](f"formatting.styles.{category}", style)
         self._sync_style()
 
     def _sync_style(self) -> None:
         colours = self._w.get("style_colours", {})
-        for name, card in self._w.get("style_cards", {}).items():
-            active = name == self.personal.style
-            colour = colours.get(name, theme.INDIGO)
+        chosen = self.config.formatting.styles
+        for (category, style), card in self._w.get("style_cards", {}).items():
+            active = chosen.get(category, "formal") == style
+            colour = colours.get(style, theme.INDIGO)
             border = f"2px solid {colour}" if active else f"1px solid {theme.BORDER}"
             card.setStyleSheet(
                 f"#StyleCard {{ background: {theme.CARD}; border: {border};"
@@ -1402,6 +1427,16 @@ class MainWindow(QMainWindow):
                      "No trailing full stop in a terminal, straight quotes in a "
                      "code editor.",
                      "profiles_enabled", self.config.profiles.enabled)
+        card.addWidget(_hairline())
+        self._switch(card, "Smart formatting",
+                     "Numbered lists from \"one… two…\", digits for times and "
+                     "amounts, no trailing period in short chat messages.",
+                     "formatting_smart", self.config.formatting.smart)
+        card.addWidget(_hairline())
+        self._switch(card, "Fit text to where the cursor is",
+                     "Lowercases and spaces a dictation dropped mid-sentence. "
+                     "Reads a few characters around the cursor; never passwords.",
+                     "formatting_context", self.config.formatting.context_aware)
         card.addWidget(_hairline())
         self._switch(card, "Check for updates",
                      "One anonymous request to GitHub at startup. Never installs "

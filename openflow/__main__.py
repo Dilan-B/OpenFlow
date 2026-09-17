@@ -4,6 +4,7 @@
     python -m openflow --check         # report backend readiness and exit
     python -m openflow --write-config  # materialize the default config file
     python -m openflow --clean "..."   # pipe text through the cleanup chain
+    python -m openflow --clean "..." --format-for slack.exe   # ...and format it
 """
 
 from __future__ import annotations
@@ -203,6 +204,19 @@ def _self_test(parser: argparse.ArgumentParser) -> int:
         except Exception as exc:
             check(f"import {module}", False, str(exc))
 
+    # 4. Caret context generates a UI Automation wrapper at runtime with
+    #    comtypes' code generator -- exactly the kind of lazily imported
+    #    module a bundler misses. Without it formatting silently loses its
+    #    context, so fail the build instead.
+    if sys.platform == "win32":
+        try:
+            from .input.caret import _uia_module
+
+            module = _uia_module()
+            check("UI Automation wrapper", hasattr(module, "IUIAutomationTextPattern"))
+        except Exception as exc:
+            check("UI Automation wrapper", False, str(exc))
+
     if failures:
         print(f"\n{len(failures)} check(s) failed: {', '.join(failures)}")
         return EXIT_SELF_TEST_FAILED
@@ -223,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="run text through the cleanup chain and print the result")
     parser.add_argument("--rules-only", action="store_true",
                         help="with --clean, skip the LLM and use the deterministic pass")
+    parser.add_argument("--format-for", metavar="APP",
+                        help="with --clean, also apply Smart Formatting and the Flow "
+                             "Style for this app (e.g. slack.exe, outlook.exe)")
     parser.add_argument("--install-shortcuts", action="store_true",
                         help="create Desktop and Start Menu launchers (Windows)")
     parser.add_argument("--minimized", action="store_true",
@@ -266,7 +283,19 @@ def main(argv: list[str] | None = None) -> int:
 
             cleaner = LLMCleaner(config)
         result = cleaner.clean(args.clean)
-        print(result.text)
+        text = result.text
+        if args.format_for:
+            from .formatting import classify, smart_format
+            from .profiles import profile_for
+
+            kind = classify(args.format_for, "", config.formatting.apps)
+            text = smart_format(
+                text, kind=kind,
+                style=config.formatting.styles.get(kind.category, "formal"),
+                profile=profile_for(args.format_for, config.profiles.apps),
+                smart=config.formatting.smart,
+            )
+        print(text)
         if args.verbose:
             for retraction in result.retractions:
                 print(f"  [{retraction.strategy}] dropped {retraction.removed!r} "

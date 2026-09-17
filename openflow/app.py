@@ -32,7 +32,9 @@ from .input.injector import Injector
 from .llm.cleaner import LLMCleaner
 from .llm.quota import QuotaLedger
 from .personalization import shared as personalization
-from .profiles import DEFAULT, apply_profile, foreground_process, profile_for
+from .formatting import classify, smart_format
+from .input.caret import CaretReader
+from .profiles import DEFAULT, foreground_window, profile_for
 from .stt.engines import SttError, build_engine
 from .stt.router import SttRouter
 from .text.hallucinations import is_silence_hallucination
@@ -74,6 +76,10 @@ class OpenFlowApp:
         self._last_insertion: tuple[str, str, str | None, float] | None = None
         # Executable the text is headed for, sampled when the hotkey goes down.
         self._target_app = ""
+        self._target_title = ""
+        # Reads the text around the caret in the target app, started with the
+        # recording and collected after transcription. See input/caret.py.
+        self._caret: CaretReader | None = None
 
         self.window = None
         self.overlay = None
@@ -368,6 +374,24 @@ class OpenFlowApp:
             self.config.updates.check_on_startup = bool(value)
             self.config.save()
             return
+        if key == "formatting_smart":
+            self.config.formatting.smart = bool(value)
+            self.config.save()
+            return
+        if key == "formatting_context":
+            self.config.formatting.context_aware = bool(value)
+            self.config.save()
+            return
+        if key.startswith("formatting.styles."):
+            category = key.rsplit(".", 1)[1]
+            from .formatting import STYLES_FOR
+
+            if category in STYLES_FOR and value in STYLES_FOR[category]:
+                self.config.formatting.styles[category] = str(value)
+                self.config.save()
+            else:
+                log.warning("ignoring style %r for category %r", value, category)
+            return
         if key == "profiles_enabled":
             self.config.profiles.enabled = bool(value)
             self.config.save()
@@ -507,7 +531,9 @@ class OpenFlowApp:
         self.injector.remember_focus()
         # Identify the target app now, while it still has focus. By the time
         # the worker finishes, the foreground window may be ours.
-        self._target_app = foreground_process() if self.config.profiles.enabled else ""
+        self._target_app, self._target_title = foreground_window()
+        fmt = self.config.formatting
+        self._caret = CaretReader().start() if fmt.smart and fmt.context_aware else None
         self.recorder.start()
         if self.config.audio.duck_others:
             self.ducker.duck()
@@ -661,19 +687,34 @@ class OpenFlowApp:
         # always wins: it is the one edit we know this speaker made by hand.
         final = self.corrections.apply(final)
 
-        if self.config.profiles.enabled:
-            profile = profile_for(self._target_app, self.config.profiles.apps)
-            if profile is not DEFAULT:
-                shaped = apply_profile(final, profile)
-                if shaped != final:
-                    log.info("%s profile applied for %s", profile.name, self._target_app)
-                final = shaped
+        # Lay the words out for where they land: lists, digits, the app
+        # category's Flow Style, and the text already around the caret.
+        fmt = self.config.formatting
+        scratch = self.window.scratch_mode
+        profile = (profile_for(self._target_app, self.config.profiles.apps)
+                   if self.config.profiles.enabled and not scratch else DEFAULT)
+        kind = classify("" if scratch else self._target_app,
+                        "" if scratch else self._target_title, fmt.apps)
+        style = fmt.styles.get(kind.category, "formal")
+        caret = None if scratch or self._caret is None else self._caret.result()
+        shaped = smart_format(
+            final, kind=kind, style=style, profile=profile, context=caret,
+            smart=fmt.smart, protected_terms=tuple(self.personal.dictionary),
+        )
+        if shaped != final:
+            log.info("formatted for %s: %s, %s style, profile %s, caret context %s",
+                     self._target_app or "unknown app", kind.category, style,
+                     profile.name, "yes" if caret else "no")
+        inserted = shaped
+        # What the user reads back in history and "Fix last": the words, not
+        # the spacing that fitted them to the caret.
+        final = shaped.strip()
 
         self._events.put(("state", "injecting"))
-        if self.window.scratch_mode:
+        if scratch:
             self._events.put(("scratch", final))
         else:
-            self.injector.inject(final)
+            self.injector.inject(inserted)
         self._events.put(("hide", None))
 
         total_ms = (time.perf_counter() - started) * 1000

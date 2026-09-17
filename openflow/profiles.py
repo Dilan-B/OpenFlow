@@ -92,12 +92,52 @@ APP_PROFILES: dict[str, str] = {
 }
 
 
+def foreground_window() -> tuple[str, str]:
+    """``(process, window title)`` of the focused window; empty when unknown.
+
+    The title is what identifies web apps: Gmail, Slack or WhatsApp in a
+    browser are all "chrome.exe" until you read the tab title. Never raises,
+    for the same reason as :func:`foreground_process`.
+    """
+    if sys.platform == "darwin":
+        return _foreground_macos(), ""
+    process = foreground_process()
+    if sys.platform != "win32" or not process:
+        return process, ""
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(min(length, 512) + 1)
+        user32.GetWindowTextW(hwnd, buffer, len(buffer))
+        return process, buffer.value
+    except Exception as exc:
+        log.debug("could not read the foreground window title: %s", exc)
+        return process, ""
+
+
+def _foreground_macos() -> str:
+    """Lowercased name of the frontmost macOS app ("slack", "messages")."""
+    try:
+        from AppKit import NSWorkspace  # type: ignore[import-not-found]
+
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return str(app.localizedName() or "").lower() if app is not None else ""
+    except Exception as exc:
+        log.debug("could not identify the frontmost macOS app: %s", exc)
+        return ""
+
+
 def foreground_process() -> str:
     """Lowercased executable name of the focused window, or "" if unknown.
 
     Never raises: this runs on the dictation path, and a failure to identify
     the window is a reason to use the default profile, not to lose the text.
     """
+    if sys.platform == "darwin":
+        return _foreground_macos()
     if sys.platform != "win32":
         return ""
     try:

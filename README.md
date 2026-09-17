@@ -38,11 +38,11 @@ The UI is Qt (PySide6), styled after Wispr Flow: warm cream canvas, white rounde
 **Insights** (words/day chart, streak, latency), **Dictionary** (names the
 transcriber should know — biases cloud recognition and fuzz-repairs local
 output: `open flo` → `OpenFlow`, but never touches real words like "grow"),
-**Snippets** (say a trigger, get the full text), **Style** (tone presets for
-the AI cleanup pass), **Transforms** (rewrite the Scratchpad: formal, shorter,
-bullets), **Scratchpad** (dictate long-form into the app itself), and
-**Settings**. Spoken punctuation works everywhere: "new paragraph",
-"question mark", and a trailing "period" or "comma" do what they say.
+**Snippets** (say a trigger, get the full text), **Style** (Wispr-style Flow
+Styles per app category: Formal, Casual, Very casual, Excited), **Transforms**
+(rewrite the Scratchpad: formal, shorter, bullets), **Scratchpad** (dictate
+long-form into the app itself), and **Settings**. Spoken punctuation works
+everywhere — see [Smart Formatting](#smart-formatting-and-flow-styles).
 
 While you hold the shortcut, OpenFlow mutes every other app playing audio
 (Spotify, videos, calls) through the Windows volume-mixer sessions and
@@ -425,6 +425,72 @@ containment guard forbids the model from adding words, so a model given
 already-trimmed text could never restore a word the rules got wrong — which is
 how "can we meet Tuesday at five, or actually make it Friday at three" used to
 come back as "Make it Friday at three."
+
+## Smart Formatting and Flow Styles
+
+After cleanup decides which words stay, formatting lays them out for the app
+they land in — following Wispr Flow's documented
+[Smart Formatting](https://docs.wisprflow.ai/articles/5373093536-how-do-i-use-smart-formatting-and-backtrack)
+and [Flow Styles](https://docs.wisprflow.ai/articles/2368263928-how-to-setup-flow-styles).
+It changes capitalization, punctuation, spacing and layout — never words.
+
+| You say | You get |
+|---|---|
+| my top goals are one finish the report two send the presentation | My top goals are:<br>1. Finish the report<br>2. Send the presentation |
+| I can't wait to see you exclamation point let's meet at seven period | I can't wait to see you! Let's meet at 7. |
+| um so the budget is uh fifty percent spent and we need twenty five more testers | So the budget is 50% spent and we need 25 more testers. |
+| email john underscore smith at symbol gmail dot com about the launch | Email john_smith@gmail.com about the launch. |
+| sounds good *(in Slack)* | Sounds good |
+| ship it *(cursor after "I think we should")* | I think we should ship it. |
+
+**Spoken punctuation and layout.** "period", "comma", "question mark",
+"exclamation point", "colon", "semicolon", "em dash", "quotation mark",
+"ellipsis"; "new line", "next line", "line break", "skip a line", "new
+paragraph", "start a new paragraph"; symbols — at sign, hashtag, ampersand,
+asterisk, percent sign, underscore, slash, backslash, tilde, parentheses, angle
+brackets, plus/minus/equals sign, degree/Celsius/Fahrenheit, trademark,
+registered trademark and copyright symbols. Single words that are ordinary
+English ("period", "comma", "colon", "dash") only count at the very end, so
+"that period of time" survives.
+
+**Lists and numbers.** "one… two…", "first… second…" and "number one…" become
+a numbered list — but only after something that introduces one, so "I have one
+cat and two dogs" stays a sentence. Times, percentages, money and numbers from
+ten up become digits; "one of the reasons" and "no one" stay words.
+
+**Messaging apps** (WhatsApp, Slack, Discord, Telegram, Signal, Teams, and the
+web versions of Messenger, Instagram, X, Facebook, Reddit and Google Chat) drop
+the trailing period on messages up to two sentences. Question and exclamation
+marks always stay.
+
+**Fitting the cursor.** OpenFlow reads a few characters on each side of the
+cursor through the accessibility API (UI Automation on Windows, AX on macOS) as
+you start dictating. Mid-sentence, the first word is lowercased and spaces are
+added only where missing; punctuation already after the cursor is not doubled.
+Password fields are never read, and nothing read is kept. Apps that expose no
+text to accessibility just get the plain formatting.
+
+**Flow Styles**, chosen per category on the Style page:
+
+| Category | Apps | Styles |
+|---|---|---|
+| Personal messages | WhatsApp, Telegram, Discord, Instagram, Messages, Signal | Formal · Casual · Very casual |
+| Work messages | Slack, Teams, Google Chat, LinkedIn | Formal · Casual · Excited |
+| Email | Gmail, Outlook, Superhuman, Apple Mail | Formal · Casual · Excited |
+| Everything else | — | Formal · Casual · Excited |
+
+Formal is caps and full punctuation. Casual drops the trailing period on
+messages up to ten sentences. Very casual also drops capitals — but never on
+names: a capital is only lowered with positive evidence the word is ordinary
+(a common opener, a suffix like *-ing*, or the same word lowercase elsewhere),
+and Dictionary terms are always protected. Excited ends on an exclamation.
+Every category defaults to Formal, which is what OpenFlow did before styles.
+
+Check it from the command line:
+
+```
+python -m openflow --clean "sounds good see you at seven" --format-for slack.exe
+```
 
 ## Learning from your corrections
 
