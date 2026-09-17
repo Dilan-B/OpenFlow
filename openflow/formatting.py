@@ -172,6 +172,9 @@ class CaretContext:
     before: str = ""
     after: str = ""
     has_selection: bool = False
+    # The highlighted text itself, when the app exposes it. Command Mode edits
+    # this; formatting only cares whether a selection exists.
+    selected: str = ""
 
 
 # ---------------------------------------------------------------------------

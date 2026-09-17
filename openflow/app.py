@@ -23,17 +23,18 @@ from .audio.conditioning import condition, is_silent, measure
 from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
 from .capture import Capture
+from .commands import EDIT_PROMPT, parse as parse_command
 from .config import Config
 from .corrections import shared as corrections
 from .exits import EXIT_NO_HOTKEY, EXIT_NO_MICROPHONE, EXIT_OK
+from .formatting import classify, smart_format
 from .history import Entry, History
+from .input.caret import CaretReader, copy_selection
 from .input.hotkeys import HotkeyListener, HotkeyUnavailable
 from .input.injector import Injector
 from .llm.cleaner import LLMCleaner
 from .llm.quota import QuotaLedger
 from .personalization import shared as personalization
-from .formatting import classify, smart_format
-from .input.caret import CaretReader
 from .profiles import DEFAULT, foreground_window, profile_for
 from .stt.engines import SttError, build_engine
 from .stt.router import SttRouter
@@ -80,6 +81,9 @@ class OpenFlowApp:
         # Reads the text around the caret in the target app, started with the
         # recording and collected after transcription. See input/caret.py.
         self._caret: CaretReader | None = None
+        # Command Mode: the caret read taken when its hotkey went down, which
+        # is the only moment the user's selection is still the focused one.
+        self._command_caret: CaretReader | None = None
 
         self.window = None
         self.overlay = None
@@ -156,6 +160,9 @@ class OpenFlowApp:
             on_stop=self._on_hotkey_stop,
             on_cancel=self._on_hotkey_cancel,
             on_undo=self._on_hotkey_undo,
+            on_command_start=(self._on_command_start
+                              if self.config.commands.enabled else None),
+            on_command_stop=self._on_command_stop,
         )
         try:
             self.hotkeys.start()
@@ -374,6 +381,12 @@ class OpenFlowApp:
             self.config.updates.check_on_startup = bool(value)
             self.config.save()
             return
+        if key == "commands_enabled":
+            self.config.commands.enabled = bool(value)
+            self.config.save()
+            log.info("command mode %s (restart to rebind the hotkey)",
+                     "enabled" if value else "disabled")
+            return
         if key == "formatting_smart":
             self.config.formatting.smart = bool(value)
             self.config.save()
@@ -547,6 +560,25 @@ class OpenFlowApp:
         self._events.put(("state", "transcribing"))
         self._jobs.put(audio)
 
+    # -- command mode ------------------------------------------------------
+    def _on_command_start(self) -> None:
+        """Hold the command combo: record an instruction, not text."""
+        self.injector.remember_focus()
+        self._target_app, self._target_title = foreground_window()
+        # Always read the caret here, whatever the formatting setting says:
+        # Command Mode is *about* the selection, not about spacing.
+        self._command_caret = CaretReader().start()
+        self.recorder.start()
+        if self.config.audio.duck_others:
+            self.ducker.duck()
+        self._events.put(("show", "recording"))
+
+    def _on_command_stop(self) -> None:
+        audio = self.recorder.stop()
+        self.ducker.restore()
+        self._events.put(("state", "transcribing"))
+        self._jobs.put(("command", audio))
+
     def _on_hotkey_cancel(self) -> None:
         self.recorder.cancel()
         self.ducker.restore()
@@ -632,13 +664,17 @@ class OpenFlowApp:
     def _worker(self) -> None:
         while not self._stop.is_set():
             try:
-                audio = self._jobs.get(timeout=0.25)
+                job = self._jobs.get(timeout=0.25)
             except queue.Empty:
                 continue
+            kind, audio = job if isinstance(job, tuple) else ("dictation", job)
             try:
-                self._process(audio)
+                if kind == "command":
+                    self._process_command(audio)
+                else:
+                    self._process(audio)
             except Exception:
-                log.exception("dictation failed")
+                log.exception("%s failed", kind)
                 self._flash_error("Failed")
 
     def _process(self, audio) -> None:
@@ -753,6 +789,93 @@ class OpenFlowApp:
             len(final), total_ms, transcript.engine, transcript.latency_ms,
             result.engine, result.latency_ms, len(result.retractions),
         )
+
+    def _process_command(self, audio) -> None:
+        """Run a spoken Command Mode instruction.
+
+        Deliberately narrow: an edit rewrites the selection, a search opens a
+        browser, anything else does nothing but say so. Words spoken here never
+        reach a search engine unless the user named one -- see commands.py.
+        """
+        rate = self.config.audio.sample_rate
+        if audio is None or len(audio) < rate * MIN_AUDIO_S:
+            self._events.put(("hide", None))
+            return
+
+        audio = condition(audio, rate)
+        try:
+            transcript = self.stt.transcribe(audio, rate)
+        except SttError as exc:
+            log.error("command transcription failed: %s", exc)
+            self._flash_error("No transcription")
+            return
+
+        spoken = self.personal.apply(transcript.text.strip())
+        if not spoken:
+            self._events.put(("hide", None))
+            return
+
+        caret = self._command_caret.result(0.6) if self._command_caret else None
+        selection = caret.selected if caret and caret.has_selection else ""
+        if not selection and self.config.commands.clipboard_fallback:
+            # Electron apps expose no text to accessibility, and that is where
+            # most selections live. Copying is the only way to see them.
+            selection = copy_selection()
+
+        command = parse_command(spoken, selection=selection)
+        log.info("command mode heard %r -> %s", spoken, command.kind)
+
+        if command.kind == "search":
+            import webbrowser
+
+            log.info("opening %s", command.url)
+            webbrowser.open(command.url)
+            self._events.put(("flash", "injecting"))
+            return
+
+        if command.kind == "edit":
+            if not selection.strip():
+                log.info("command needs a selection; nothing was selected")
+                self._flash_error("Select some text first")
+                return
+            self._run_command_edit(command.instruction, selection)
+            return
+
+        # Wispr does nothing here. Saying so is the difference between "that
+        # was not a command" and "the hotkey is broken".
+        log.info("not a command: needs \"hey flow ...\" or a search engine")
+        self._flash_error("Not a command")
+
+    def _run_command_edit(self, instruction: str, selection: str) -> None:
+        from .llm.base import ProviderError
+        from .llm.providers import build_provider
+
+        self._events.put(("state", "transcribing"))
+        user = f"INSTRUCTION: {instruction}\n\nTEXT:\n{selection}"
+        for name in self.config.llm.backends:
+            if name == "rules":
+                continue
+            try:
+                provider = build_provider(name, self.config)
+            except ValueError:
+                continue
+            if not provider.available():
+                continue
+            try:
+                # strict=False: this is a rewrite the user asked for, so the
+                # containment guard that protects dictation would reject it.
+                out = provider.complete(EDIT_PROMPT, user, strict=False)
+            except ProviderError as exc:
+                log.warning("command edit via %s failed: %s", name, exc)
+                continue
+            self._events.put(("state", "injecting"))
+            # Typing over a selection replaces it, which is the whole gesture.
+            self.injector.inject(out)
+            self._events.put(("hide", None))
+            log.info("command edited %d chars via %s", len(selection), name)
+            return
+
+        self._flash_error("No AI engine")
 
     def _flash_error(self, message: str) -> None:
         self._events.put(("state", "error"))

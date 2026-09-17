@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 
 from ..formatting import CaretContext
 
@@ -28,10 +29,17 @@ log = logging.getLogger(__name__)
 
 BEFORE_CHARS = 200
 AFTER_CHARS = 40
+# A selection is the thing Command Mode edits, so it gets a real budget --
+# enough for a long paragraph, short of a whole document.
+SELECTION_CHARS = 8000
 # UI Automation calls cross into the target process. A hung app must not hang
 # dictation, so every call is bounded, and the whole read runs off the hotkey
 # thread (see CaretReader).
 UIA_TIMEOUT_MS = 250
+
+
+def _clean(text: str | None) -> str:
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def read_caret_context() -> CaretContext | None:
@@ -108,9 +116,10 @@ def _read_windows() -> CaretContext | None:
         after.MoveEndpointByUnit(_ENDPOINT_END, _UNIT_CHARACTER, AFTER_CHARS)
 
         return CaretContext(
-            before=(before.GetText(BEFORE_CHARS) or "").replace("\r\n", "\n").replace("\r", "\n"),
-            after=(after.GetText(AFTER_CHARS) or "").replace("\r\n", "\n").replace("\r", "\n"),
+            before=_clean(before.GetText(BEFORE_CHARS)),
+            after=_clean(after.GetText(AFTER_CHARS)),
             has_selection=has_selection,
+            selected=_clean(caret.GetText(SELECTION_CHARS)) if has_selection else "",
         )
     finally:
         comtypes.CoUninitialize()
@@ -153,12 +162,61 @@ def _read_macos() -> CaretContext | None:
         before=value[max(0, start - BEFORE_CHARS):start],
         after=value[start + length:start + length + AFTER_CHARS],
         has_selection=length > 0,
+        selected=value[start:start + min(length, SELECTION_CHARS)],
     )
 
 
 # ---------------------------------------------------------------------------
 # Off-thread reader
 # ---------------------------------------------------------------------------
+def copy_selection(timeout_s: float = 0.35) -> str:
+    """Read the selection by copying it, for apps accessibility cannot see.
+
+    Many Electron apps (Slack, Discord, Notion) expose no text pattern at all,
+    and Command Mode is useless without the words it is meant to edit. So this
+    is the fallback: send the copy shortcut, read the clipboard, then put back
+    whatever was on it.
+
+    Only ever called for Command Mode, never for ordinary dictation -- taking
+    over the clipboard is a reasonable cost for an explicit "edit this", and an
+    unreasonable one for every sentence a user speaks.
+    """
+    try:
+        import pyperclip
+        from pynput.keyboard import Controller, Key
+    except ImportError:
+        return ""
+
+    keyboard = Controller()
+    modifier = Key.cmd if sys.platform == "darwin" else Key.ctrl
+    try:
+        previous = pyperclip.paste()
+    except Exception:
+        previous = ""
+    sentinel = "\x00openflow-no-selection\x00"
+    try:
+        pyperclip.copy(sentinel)
+        with keyboard.pressed(modifier):
+            keyboard.press("c")
+            keyboard.release("c")
+        deadline = time.monotonic() + timeout_s
+        text = sentinel
+        while time.monotonic() < deadline:
+            time.sleep(0.02)
+            text = pyperclip.paste()
+            if text != sentinel:
+                break
+        return "" if text == sentinel else text
+    except Exception as exc:
+        log.debug("could not copy the selection: %s", exc)
+        return ""
+    finally:
+        try:
+            pyperclip.copy(previous)
+        except Exception:
+            log.debug("could not restore the clipboard")
+
+
 class CaretReader:
     """Read the caret context in the background as a dictation starts.
 

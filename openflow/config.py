@@ -35,6 +35,11 @@ class HotkeyConfig:
     # said". Ctrl+Shift+Z sits next to the universal undo without colliding
     # with it, so the app's own undo and the host app's stay separate.
     undo: str = "<ctrl>+<shift>+z"
+    # Command Mode: hold, speak an instruction, release. Wispr's Windows
+    # default, and deliberately a superset of the dictation combo -- the
+    # listener hands a just-started dictation over when the third key lands.
+    # Empty disables it.
+    command: str = "<ctrl>+<cmd>+<alt>"
     # Ignore key-repeat chatter from a held key (milliseconds).
     debounce_ms: int = 120
 
@@ -244,6 +249,17 @@ class FormattingConfig:
 
 
 @dataclass(slots=True)
+class CommandConfig:
+    """Command Mode -- speak an instruction instead of text. See commands.py."""
+
+    enabled: bool = True
+    # Reading the selection by copying it (Ctrl+C, then the clipboard is put
+    # back) is the only way to see text in apps that expose none to
+    # accessibility -- most Electron ones. Only ever used for Command Mode.
+    clipboard_fallback: bool = True
+
+
+@dataclass(slots=True)
 class CaptureConfig:
     """Opt-in local dataset capture, for building a real evaluation set.
 
@@ -266,6 +282,7 @@ class Config:
     injection: InjectionConfig = field(default_factory=InjectionConfig)
     profiles: ProfileConfig = field(default_factory=ProfileConfig)
     formatting: FormattingConfig = field(default_factory=FormattingConfig)
+    commands: CommandConfig = field(default_factory=CommandConfig)
     updates: UpdateConfig = field(default_factory=UpdateConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     # Which set of defaults this file was written against. 0 means "predates

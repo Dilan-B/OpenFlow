@@ -1428,6 +1428,12 @@ class MainWindow(QMainWindow):
                      "code editor.",
                      "profiles_enabled", self.config.profiles.enabled)
         card.addWidget(_hairline())
+        self._switch(card, "Command mode",
+                     f"Hold {theme.pretty_hotkey(self.config.hotkey.command)} and say "
+                     "“hey Flow, make this shorter” to rewrite selected text, "
+                     "or “search Google for…” to look something up.",
+                     "commands_enabled", self.config.commands.enabled)
+        card.addWidget(_hairline())
         self._switch(card, "Smart formatting",
                      "Numbered lists from \"one… two…\", digits for times and "
                      "amounts, no trailing period in short chat messages.",

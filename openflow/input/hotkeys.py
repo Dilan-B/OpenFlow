@@ -20,6 +20,11 @@ from ..config import HotkeyConfig
 
 log = logging.getLogger(__name__)
 
+# How long after a dictation starts Command Mode may still take it over. The
+# command combo contains the dictation combo, so the extra key always lands a
+# few tens of milliseconds late; past this the user is already talking.
+COMMAND_TAKEOVER_S = 0.8
+
 
 class HotkeyUnavailable(RuntimeError):
     pass
@@ -34,12 +39,16 @@ class HotkeyListener:
         on_stop: Callable[[], None],
         on_cancel: Callable[[], None],
         on_undo: Callable[[], None] | None = None,
+        on_command_start: Callable[[], None] | None = None,
+        on_command_stop: Callable[[], None] | None = None,
     ) -> None:
         self.cfg = config
         self.on_start = on_start
         self.on_stop = on_stop
         self.on_cancel = on_cancel
         self.on_undo = on_undo
+        self.on_command_start = on_command_start
+        self.on_command_stop = on_command_stop
 
         self._listener = None
         self._active = False          # combo currently satisfied
@@ -48,6 +57,10 @@ class HotkeyListener:
         self._combo: frozenset = frozenset()
         self._undo_combo: frozenset = frozenset()
         self._undo_active = False
+        self._command_combo: frozenset = frozenset()
+        self._command_active = False
+        self._command_recording = False
+        self._recording_since = 0.0
         self._cancel_key = None
         self._last_edge = 0.0
         self._lock = threading.Lock()
@@ -69,6 +82,14 @@ class HotkeyListener:
         if self.cfg.cancel:
             parsed = keyboard.HotKey.parse(self._normalize(self.cfg.cancel))
             self._cancel_key = parsed[0] if len(parsed) == 1 else None
+        if self.cfg.command and self.on_command_start is not None:
+            try:
+                self._command_combo = frozenset(
+                    keyboard.HotKey.parse(self._normalize(self.cfg.command))
+                )
+            except ValueError as exc:
+                log.warning("could not parse command combo %r: %s", self.cfg.command, exc)
+                self._command_combo = frozenset()
         if self.cfg.undo:
             try:
                 self._undo_combo = frozenset(
@@ -86,6 +107,8 @@ class HotkeyListener:
         self._listener.daemon = True
         self._listener.start()
         log.info("hotkey listening: %s (%s)", self.cfg.trigger, self.cfg.mode)
+        if self._command_combo:
+            log.info("command mode listening: %s", self.cfg.command)
 
     @property
     def alive(self) -> bool:
@@ -167,12 +190,35 @@ class HotkeyListener:
             log.debug("hotkey ignored: dictation is paused")
             return
 
-        if self._cancel_key is not None and key == self._cancel_key and self._recording:
+        if self._cancel_key is not None and key == self._cancel_key and (
+                self._recording or self._command_recording):
             self._recording = self._active = False
+            if self._command_recording:
+                self._command_recording = self._command_active = False
             self._safely(self.on_cancel)
             return
 
         self._pressed.add(key)
+
+        # Command Mode's combo contains the dictation combo (Ctrl+Win+Alt over
+        # Ctrl+Win), so by the time the last key lands a dictation has usually
+        # started. Hand it over -- but only while it is young: past the
+        # takeover window the user is mid-sentence, and discarding their speech
+        # to start a command would be the worse mistake.
+        if (self._command_combo and self.on_command_start is not None
+                and not self._command_recording
+                and self._command_combo.issubset(self._pressed)):
+            if self._recording:
+                if (time.monotonic() - self._recording_since) > COMMAND_TAKEOVER_S:
+                    return
+                self._recording = self._active = False
+                self._safely(self.on_cancel)
+            self._command_recording = self._command_active = True
+            log.debug("command combo satisfied: %s", self.cfg.command)
+            self._safely(self.on_command_start)
+            return
+        if self._command_recording:
+            return
 
         # Undo is checked before the dictation trigger and only when we are not
         # recording, so a combo that shares modifiers cannot steal a dictation.
@@ -194,9 +240,11 @@ class HotkeyListener:
         with self._lock:
             if self.cfg.mode == "toggle":
                 self._recording = not self._recording
+                self._recording_since = time.monotonic()
                 self._safely(self.on_start if self._recording else self.on_stop)
             elif not self._recording:
                 self._recording = True
+                self._recording_since = time.monotonic()
                 self._safely(self.on_start)
 
     def _on_release(self, key) -> None:
@@ -216,6 +264,17 @@ class HotkeyListener:
         self._pressed.discard(key)
         if self._undo_combo and not self._undo_combo.issubset(self._pressed):
             self._undo_active = False
+
+        if self._command_active and not self._command_combo.issubset(self._pressed):
+            self._command_active = False
+            if self._command_recording:
+                self._command_recording = False
+                if self.on_command_stop is not None:
+                    self._safely(self.on_command_stop)
+            # Ctrl+Win may still be held; that must not fall through into the
+            # dictation branch below and stop a recording that never started.
+            self._active = False
+            return
         if not self._combo.issubset(self._pressed):
             self._active = False
             if self.cfg.mode == "push_to_talk" and self._recording:
