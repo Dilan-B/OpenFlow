@@ -383,6 +383,11 @@ Writes `~/.openflow/config.json`. Notable keys:
 | `llm.only_when_uncertain` | call the model only where the rules pass flagged itself unsure — off by default |
 | `llm.daily_limits` | free-tier request ceilings per provider per day |
 | `llm.hourly_audio_seconds` | rolling audio-duration ceiling (Groq: 7200/hour) |
+| `hotkey.command` | Command Mode combo (default `<ctrl>+<cmd>+<alt>`); empty disables it |
+| `commands.enabled` | master switch for Command Mode |
+| `commands.clipboard_fallback` | read a selection by copying it where accessibility shows none |
+| `formatting.smart` | spoken lists, digits, messaging periods, caret fitting |
+| `formatting.styles` | app category -> `formal` / `casual` / `very_casual` / `excited` |
 | `injection.method` | `paste` (fast) or `type` |
 
 ## Research
@@ -491,6 +496,46 @@ Check it from the command line:
 ```
 python -m openflow --clean "sounds good see you at seven" --format-for slack.exe
 ```
+
+## Command Mode
+
+Hold **Ctrl + Win + Alt**, say what you want, release — Wispr Flow's
+[Command Mode](https://docs.wisprflow.ai/articles/4816967992-how-to-use-command-mode).
+Esc cancels. Two kinds of command, and nothing else counts:
+
+**Edit the text you have selected.** Say a "Hey Flow" wake phrase first:
+
+| Selected | You say | You get |
+|---|---|---|
+| a long paragraph | hey flow, make this shorter | the same point, shorter |
+| a blunt sentence | hey flow, rewrite this as a friendly Slack message | a friendlier version |
+| a paragraph | hey flow, turn this into three bullet points | a bulleted list |
+
+**Search the web.** Start with "ask", "search" or "hey" and name the engine —
+Google, Perplexity, ChatGPT or Claude. Anything you have selected is added to
+the query:
+
+```
+search google for flight times to Denver
+ask claude about this          (with code selected)
+hey chatgpt what is the capital of Peru
+```
+
+Say anything else and nothing happens: the pill flashes and OpenFlow says it
+wasn't a command. That is deliberate. Your words are only sent to a search
+engine when you named one, and the destination is a fixed list in
+`openflow/commands.py` — a spoken command can never invent a URL.
+
+The command shortcut deliberately contains the dictation one, as Wispr's does,
+so pressing it always starts a dictation a few milliseconds early. The listener
+hands that dictation over to Command Mode — but only within 0.8 s. Press Alt
+in the middle of a real sentence and OpenFlow keeps dictating rather than
+discarding what you have already said.
+
+To read your selection OpenFlow asks the accessibility API first; where an app
+exposes no text (most Electron apps) it falls back to copying the selection and
+putting your clipboard back. That copy only ever happens in Command Mode, never
+during ordinary dictation. Turn the whole feature off in Settings.
 
 ## Learning from your corrections
 
