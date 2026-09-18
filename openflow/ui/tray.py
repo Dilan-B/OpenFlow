@@ -31,12 +31,17 @@ class Tray:
         on_show: Callable[[], None],
         on_toggle_pause: Callable[[], None],
         on_quit: Callable[[], None],
+        on_toggle_texting: Callable[[], None] | None = None,
+        texting: bool = False,
     ) -> None:
         self.on_show = on_show
         self.on_toggle_pause = on_toggle_pause
+        self.on_toggle_texting = on_toggle_texting
         self.on_quit = on_quit
+        self._texting = texting
         self._tray: QSystemTrayIcon | None = None
         self._pause_action: QAction | None = None
+        self._texting_action: QAction | None = None
         self._paused = False
 
     @staticmethod
@@ -57,6 +62,14 @@ class Tray:
         self._pause_action = QAction("Pause dictation", menu)
         self._pause_action.triggered.connect(self.on_toggle_pause)
         menu.addAction(self._pause_action)
+        if self.on_toggle_texting is not None:
+            # Checkable, so the menu itself shows whether it is on. The app
+            # owns the state; set_texting() keeps the tick in step with it.
+            self._texting_action = QAction("Texting mode", menu)
+            self._texting_action.setCheckable(True)
+            self._texting_action.setChecked(self._texting)
+            self._texting_action.triggered.connect(lambda _=False: self.on_toggle_texting())
+            menu.addAction(self._texting_action)
         menu.addSeparator()
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.on_quit)
@@ -79,6 +92,11 @@ class Tray:
         if self._pause_action is not None:
             self._pause_action.setText(
                 "Resume dictation" if paused else "Pause dictation")
+
+    def set_texting(self, on: bool) -> None:
+        self._texting = on
+        if self._texting_action is not None:
+            self._texting_action.setChecked(on)
 
     def stop(self) -> None:
         if self._tray is not None:

@@ -19,6 +19,7 @@ import queue
 import threading
 import time
 
+from .audio import chime
 from .audio.conditioning import condition, is_silent, measure
 from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
@@ -139,6 +140,7 @@ class OpenFlowApp:
                 "hide": self.hide_window,
                 "clear_history": self.history.clear,
                 "setting": self._apply_setting,
+                "api_key": self._set_api_key,
                 "transform": self._start_transform,
                 "last_text": self._last_text,
                 "learn": self._learn_correction,
@@ -148,7 +150,9 @@ class OpenFlowApp:
         self.tray = Tray(
             on_show=lambda: self._events.put(("show_window", None)),
             on_toggle_pause=lambda: self._events.put(("toggle_pause", None)),
+            on_toggle_texting=lambda: self._events.put(("toggle_texting", None)),
             on_quit=lambda: self._events.put(("quit", None)),
+            texting=self.config.formatting.texting,
         )
 
         try:
@@ -357,6 +361,34 @@ class OpenFlowApp:
         self.window.set_state(state)
         self.tray.set_state(state, self.paused)
 
+    def set_texting(self, on: bool) -> None:
+        """Texting mode on or off, from Settings or the tray -- kept in step."""
+        self.config.formatting.texting = on
+        self.config.save()
+        log.info("texting mode %s", "on" if on else "off")
+        self.window.set_texting(on)
+        self.tray.set_texting(on)
+
+    def _set_api_key(self, name: str, value: str | None) -> tuple[bool, str]:
+        """Save (or with None, remove) a provider key from the Settings page.
+        Returns (ok, message to show). The key itself is never logged."""
+        from . import keys
+
+        try:
+            if value is None:
+                keys.delete(name)
+                log.info("removed saved %s", name)
+            else:
+                keys.save(name, value)
+                log.info("saved %s to the keychain", name)
+        except ValueError as exc:
+            return False, str(exc).capitalize()
+        except Exception as exc:
+            log.warning("could not save %s: %s", name, exc)
+            return False, "Could not save to the Keychain"
+        self._events.put(("engines", None))
+        return True, ""
+
     # -- settings ----------------------------------------------------------
     def _apply_setting(self, key: str, value) -> None:
         if key == "launch_at_login":
@@ -392,6 +424,15 @@ class OpenFlowApp:
             self.config.save()
             log.info("command mode %s (restart to rebind the hotkey)",
                      "enabled" if value else "disabled")
+            return
+        if key == "start_sound":
+            self.config.audio.start_sound = bool(value)
+            self.config.save()
+            if value:
+                chime.play()    # so you hear what you just turned on
+            return
+        if key == "texting_mode":
+            self.set_texting(bool(value))
             return
         if key == "formatting_smart":
             self.config.formatting.smart = bool(value)
@@ -553,6 +594,8 @@ class OpenFlowApp:
         self._target_app, self._target_title = foreground_window()
         fmt = self.config.formatting
         self._caret = CaretReader().start() if fmt.smart and fmt.context_aware else None
+        if self.config.audio.start_sound:
+            chime.play()
         self.recorder.start()
         if self.config.audio.duck_others:
             self.ducker.duck()
@@ -574,6 +617,8 @@ class OpenFlowApp:
         # Always read the caret here, whatever the formatting setting says:
         # Command Mode is *about* the selection, not about spacing.
         self._command_caret = CaretReader().start()
+        if self.config.audio.start_sound:
+            chime.play()
         self.recorder.start()
         if self.config.audio.duck_others:
             self.ducker.duck()
@@ -663,6 +708,8 @@ class OpenFlowApp:
             self.show_window()
         elif kind == "toggle_pause":
             self.toggle_pause()
+        elif kind == "toggle_texting":
+            self.set_texting(not self.config.formatting.texting)
         elif kind == "quit":
             self.quit()
 
@@ -742,6 +789,7 @@ class OpenFlowApp:
         shaped = smart_format(
             final, kind=kind, style=style, profile=profile, context=caret,
             smart=fmt.smart, protected_terms=tuple(self.personal.dictionary),
+            texting=fmt.texting,
         )
         if shaped != final:
             log.info("formatted for %s: %s, %s style, profile %s, caret context %s",

@@ -1166,7 +1166,8 @@ class MainWindow(QMainWindow):
 
         self._w["style_cards"] = {}
         palette = {"formal": theme.INDIGO, "casual": theme.TEAL_A,
-                   "very_casual": theme.PINK, "excited": theme.AMBER_A}
+                   "very_casual": theme.PINK, "excited": theme.AMBER_A,
+                   "texting": theme.BLUE}
         self._w["style_colours"] = palette
         for category in CATEGORIES:
             section = self._card(layout, margins=(18, 14, 18, 16))
@@ -1415,6 +1416,10 @@ class MainWindow(QMainWindow):
                      "Slower — the built-in pass is instant and usually matches it.",
                      "llm_enabled", self.config.llm.enabled)
         card.addWidget(_hairline())
+        self._switch(card, "Start sound",
+                     "A soft chime when recording starts.",
+                     "start_sound", self.config.audio.start_sound)
+        card.addWidget(_hairline())
         self._switch(card, "Mute other apps while dictating",
                      "Spotify, videos, and calls mute on press and come back on release.",
                      "duck_others", self.config.audio.duck_others)
@@ -1439,6 +1444,11 @@ class MainWindow(QMainWindow):
                      "amounts, no trailing period in short chat messages.",
                      "formatting_smart", self.config.formatting.smart)
         card.addWidget(_hairline())
+        self._switch(card, "Texting mode",
+                     "No caps, no periods or commas, in every app. Also in the "
+                     "menu bar icon's menu. Question marks and names stay.",
+                     "texting_mode", self.config.formatting.texting)
+        card.addWidget(_hairline())
         self._switch(card, "Fit text to where the cursor is",
                      "Lowercases and spaces a dictation dropped mid-sentence. "
                      "Reads a few characters around the cursor; never passwords.",
@@ -1451,6 +1461,7 @@ class MainWindow(QMainWindow):
         card.addWidget(_hairline())
 
         self._build_microphone_card(layout)
+        self._build_keys_card(layout)
 
         method_row = QHBoxLayout()
         method_label = QLabel("Insert text by")
@@ -1649,6 +1660,104 @@ class MainWindow(QMainWindow):
         switch.toggled.connect(lambda on, k=key: self.cb["setting"](k, on))
         row.addWidget(switch)
         layout.addLayout(row)
+        self._w[f"switch_{key}"] = switch
+
+    def set_texting(self, on: bool) -> None:
+        """Follow a Texting mode change made from the tray menu."""
+        switch = self._w.get("switch_texting_mode")
+        if switch is not None and switch.isChecked() != on:
+            switch.blockSignals(True)
+            switch.setChecked(on)
+            switch.blockSignals(False)
+
+    # ------------------------------------------------------------------ keys
+    def _build_keys_card(self, layout) -> None:
+        """Groq and Gemini keys, saved to the macOS Keychain. The better free
+        models all live behind one of these, and a Dock-launched Mac app never
+        sees keys exported from a shell profile."""
+        from .. import keys
+
+        card = self._card(layout, margins=(20, 14, 20, 14))
+        head = QLabel("AI models")
+        head.setObjectName("H2")
+        card.addWidget(head)
+        note = QLabel(
+            "Free API keys unlock the best models: Groq runs Whisper large-v3 "
+            "for transcription and the AI cleanup pass; Gemini is a second "
+            "cleanup engine. Keys are kept in your Keychain, never in the "
+            "config file." if keys.supported() else
+            "Set GROQ_API_KEY and GEMINI_API_KEY in your environment to use "
+            "Groq's Whisper large-v3 and AI cleanup.")
+        note.setObjectName("Faint")
+        note.setWordWrap(True)
+        card.addWidget(note)
+        if not keys.supported():
+            return
+
+        for name, (label, url) in keys.KNOWN.items():
+            card.addWidget(_hairline())
+            row = QHBoxLayout()
+            col = QVBoxLayout()
+            col.setSpacing(1)
+            title = QLabel(label)
+            title.setStyleSheet("background: transparent; font-weight: 600;")
+            col.addWidget(title)
+            status = QLabel()
+            status.setObjectName("Faint")
+            col.addWidget(status)
+            row.addLayout(col, 1)
+
+            field = QLineEdit()
+            field.setEchoMode(QLineEdit.EchoMode.Password)
+            field.setPlaceholderText("Paste key")
+            field.setMaximumWidth(220)
+            row.addWidget(field)
+            save = QPushButton("Save")
+            row.addWidget(save)
+            remove = QPushButton("Remove")
+            row.addWidget(remove)
+            get = QPushButton("Get a free key")
+            get.clicked.connect(lambda _=False, u=url: self._open_url(u))
+            row.addWidget(get)
+            card.addLayout(row)
+
+            widgets = (status, field, remove)
+            save.clicked.connect(
+                lambda _=False, n=name, w=widgets: self._save_key(n, w))
+            field.returnPressed.connect(
+                lambda n=name, w=widgets: self._save_key(n, w))
+            remove.clicked.connect(
+                lambda _=False, n=name, w=widgets: self._remove_key(n, w))
+            self._sync_key(name, widgets)
+
+    def _sync_key(self, name: str, widgets, message: str = "") -> None:
+        from .. import keys
+
+        status, _field, remove = widgets
+        saved = keys.load(name)
+        if message:
+            text = message
+        elif os.environ.get(name):
+            text = "Set in the environment"
+        elif saved:
+            text = "Saved in Keychain"
+        else:
+            text = "Not set"
+        status.setText(text)
+        remove.setVisible(bool(saved))
+
+    def _save_key(self, name: str, widgets) -> None:
+        _status, field, _remove = widgets
+        value = field.text().strip()
+        if not value:
+            return
+        ok, message = self.cb["api_key"](name, value)
+        field.clear()
+        self._sync_key(name, widgets, "" if ok else message)
+
+    def _remove_key(self, name: str, widgets) -> None:
+        self.cb["api_key"](name, None)
+        self._sync_key(name, widgets)
 
     # ---------------------------------------------------------------- actions
     def _begin_capture(self) -> None:

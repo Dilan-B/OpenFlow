@@ -20,6 +20,11 @@ Flow Styles, chosen per app category
   * Very Casual  no caps + less punctuation (personal messages only)
   * Excited      more exclamations (work, email and other only)
 
+Plus one of our own:
+  * Texting      no caps, no periods or commas -- how people actually text.
+                 A per-category style for personal messages, and what the
+                 global Texting mode switch applies everywhere.
+
 Flow Styles change capitalization and punctuation only, never words -- the
 same promise cleanup makes, which is why this runs after it and can never undo
 an edit it made.
@@ -50,12 +55,14 @@ CATEGORY_LABELS = {
 }
 
 FORMAL, CASUAL, VERY_CASUAL, EXCITED = "formal", "casual", "very_casual", "excited"
+TEXTING = "texting"
 
 STYLE_LABELS = {
     FORMAL: "Formal",
     CASUAL: "Casual",
     VERY_CASUAL: "Very casual",
     EXCITED: "Excited!",
+    TEXTING: "Texting",
 }
 
 STYLE_CAPTIONS = {
@@ -63,12 +70,14 @@ STYLE_CAPTIONS = {
     CASUAL: "Caps + less punctuation",
     VERY_CASUAL: "No caps + less punctuation",
     EXCITED: "More exclamations",
+    TEXTING: "No caps, no periods",
 }
 
 # Wispr offers Very Casual only for personal messages, and Excited only
-# outside them.
+# outside them. Texting sits with personal messages too; Texting mode
+# (smart_format's ``texting``) applies it anywhere.
 STYLES_FOR = {
-    PERSONAL: (FORMAL, CASUAL, VERY_CASUAL),
+    PERSONAL: (FORMAL, CASUAL, VERY_CASUAL, TEXTING),
     WORK: (FORMAL, CASUAL, EXCITED),
     EMAIL: (FORMAL, CASUAL, EXCITED),
     OTHER: (FORMAL, CASUAL, EXCITED),
@@ -214,6 +223,44 @@ def _lowercase_sentence_starts(text: str, protected: set[str]) -> str:
     return "\n".join(lines)
 
 
+# A full stop that ends a sentence: after a word or closing bracket/quote, not
+# part of an ellipsis, a decimal, or an initialism like "U.S." (a lone letter
+# followed by a dot).
+_SENTENCE_PERIOD = re.compile(
+    r"(?<![.\s])(?<!\b[A-Za-z])\.(?!\.)(?=[\s\)\]\}\"'”’]|$)")
+# A comma between words -- never one inside a number like 1,000.
+_TEXT_COMMA = re.compile(r"(?<!\d),|,(?!\d)")
+
+
+_I_FORMS = frozenset({"I", "I'm", "I'll", "I've", "I'd"})
+
+
+def _lower_sentence_start_texting(part: str, protected: set[str]) -> str:
+    """Bolder than Very casual: texting wants no sentence caps at all, so any
+    plain Capitalised opener goes lowercase. "I", acronyms ("API", "iOS") and
+    names in the personal dictionary keep theirs."""
+    match = _FIRST_WORD.match(part)
+    if not match:
+        return part
+    word = match.group(2)
+    if word in _I_FORMS or word.lower() in protected \
+            or not (word[1:].islower() or len(word) == 1):
+        return part
+    return match.group(1) + word[0].lower() + word[1:] + part[match.end():]
+
+
+def _textify(text: str, protected: set[str]) -> str:
+    """Texting: lowercase sentence starts, no periods or commas. Question and
+    exclamation marks stay -- they change what a message means."""
+    out = "\n".join(
+        " ".join(_lower_sentence_start_texting(p, protected)
+                 for p in _SENTENCE_SPLIT.split(line))
+        for line in text.split("\n"))
+    out = _SENTENCE_PERIOD.sub("", out)
+    out = _TEXT_COMMA.sub("", out)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
 def _excite(text: str) -> str:
     stripped = text.rstrip()
     if stripped.endswith(".") and not stripped.endswith(".."):
@@ -253,8 +300,12 @@ def smart_format(
     context: CaretContext | None = None,
     smart: bool = True,
     protected_terms: tuple[str, ...] = (),
+    texting: bool = False,
 ) -> str:
-    """Lay finished text out for the app it is about to land in."""
+    """Lay finished text out for the app it is about to land in.
+
+    ``texting`` forces the Texting style whatever the category's style is.
+    """
     if not text or not text.strip():
         return text
     protected = {t.lower() for t in protected_terms}
@@ -272,10 +323,15 @@ def smart_format(
     if profile.name in ("code", "shell") or (not smart and profile.name == "chat"):
         out = apply_profile(out, profile)
     else:
-        if style not in STYLES_FOR.get(kind.category, STYLES_FOR[OTHER]):
+        if texting:
+            style = TEXTING
+        elif style not in STYLES_FOR.get(kind.category, STYLES_FOR[OTHER]):
             style = FORMAL
         is_list = "\n1. " in out or out.startswith("1. ")
-        if style == VERY_CASUAL and not is_list:
+        if style == TEXTING:
+            if not is_list:
+                out = _textify(out, protected)
+        elif style == VERY_CASUAL and not is_list:
             out = _lowercase_sentence_starts(out, protected)
         if style == EXCITED:
             out = _excite(out)

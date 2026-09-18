@@ -81,7 +81,12 @@ class GroqWhisper:
 
     def __init__(self, config: Config) -> None:
         self.cfg = config
-        self.key = api_key("GROQ_API_KEY")
+
+    @property
+    def key(self) -> str | None:
+        # Read per use, not once: the router is built at startup, and a key
+        # saved in Settings afterwards should take effect straight away.
+        return api_key("GROQ_API_KEY")
 
     def available(self) -> bool:
         return bool(self.key)
