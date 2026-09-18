@@ -12,12 +12,11 @@ diagnostics blob that leaks it would be a nasty way to break that promise.
 
 from __future__ import annotations
 
-import os
 import platform
 import sys
 from pathlib import Path
 
-from .config import CONFIG_DIR, Config
+from .config import CONFIG_DIR, Config, api_key
 
 LOG_LINES = 60
 
@@ -124,10 +123,10 @@ def collect(config: Config | None = None) -> str:
     lines.append(f"  injection          {config.injection.method}")
     lines.append(f"  duck others        {config.audio.duck_others}")
     lines.append(f"  log transcripts    {config.log_transcripts}")
-    # Keys are read from the environment and never stored, but say which are
-    # present so "why is the cloud path not used" answers itself.
+    # Never print a key, but say which are present so "why is the cloud path
+    # not used" answers itself.
     for env in ("GROQ_API_KEY", "GEMINI_API_KEY"):
-        lines.append(f"  {env:<18} {'set' if os.environ.get(env) else 'not set'}")
+        lines.append(f"  {env:<18} {'set' if api_key(env) else 'not set'}")
 
     section("Backends")
     lines.extend(_backend_status(config))

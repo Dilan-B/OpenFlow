@@ -54,6 +54,8 @@ class AudioConfig:
     # Mute other apps (Spotify, videos, calls) while recording and restore
     # them the moment you let go, via the Windows volume mixer sessions.
     duck_others: bool = True
+    # A short soft chime when recording starts (audio/chime.py).
+    start_sound: bool = True
 
 
 @dataclass(slots=True)
@@ -246,6 +248,9 @@ class FormattingConfig:
     })
     # Extra "executable or app name": "category" mappings, over the built-ins.
     apps: dict[str, str] = field(default_factory=dict)
+    # Texting mode: no caps, no periods or commas, in every app, whatever the
+    # styles above say. Toggled from Settings or the menu bar/tray.
+    texting: bool = False
 
 
 @dataclass(slots=True)
@@ -382,9 +387,13 @@ def _apply(target, data: dict) -> None:
 
 
 def api_key(name: str) -> str | None:
-    """Read a provider key from the environment.
+    """Read a provider key: the environment first, then one saved from the
+    Settings page (the macOS Keychain -- see keys.py).
 
-    Keys are never stored in the config file -- put them in the environment or
-    a .env you source yourself.
+    Keys are never stored in the config file.
     """
-    return os.environ.get(name) or None
+    if os.environ.get(name):
+        return os.environ[name]
+    from . import keys
+
+    return keys.load(name)
