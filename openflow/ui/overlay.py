@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 import time
 
 from PySide6.QtCore import Qt, QRectF
@@ -35,6 +36,14 @@ BAR_GAP = 3.0
 EASE_UP = 0.6      # jump fast when the level rises...
 EASE_DOWN = 0.28   # ...settle slowly when it falls
 
+# NSWindowCollectionBehavior: show on every Space and over full-screen apps,
+# stay put during Exposé/Mission Control, and keep out of Cmd+` cycling.
+_NS_CAN_JOIN_ALL_SPACES = 1 << 0
+_NS_MOVE_TO_ACTIVE_SPACE = 1 << 1   # set by Qt; AppKit rejects it with the above
+_NS_STATIONARY = 1 << 4
+_NS_IGNORES_CYCLE = 1 << 6
+_NS_FULL_SCREEN_AUXILIARY = 1 << 8
+
 
 class Overlay(QWidget):
     def __init__(self, config: UiConfig) -> None:
@@ -48,6 +57,12 @@ class Overlay(QWidget):
         self.state = "idle"
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if sys.platform == "darwin":
+            # Qt makes Tool windows NSPanels that hide whenever OpenFlow is not
+            # the active app -- which, for a pill shown while you dictate into
+            # another app, is always. Keep it visible.
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+        self._native_configured = False
         self.setFixedSize(config.overlay_width, config.overlay_height)
         self.setWindowOpacity(config.opacity)
 
@@ -61,6 +76,7 @@ class Overlay(QWidget):
         self._place_on_active_screen()
         if not self.isVisible():
             self.show()
+            self._configure_native_window()
 
     def hide_pill(self) -> None:
         self.hide()
@@ -71,6 +87,36 @@ class Overlay(QWidget):
 
     def set_state(self, state: str, detail: str = "") -> None:
         self.state = state
+
+    def _configure_native_window(self) -> None:
+        """macOS: pin the panel's behaviour on the NSWindow itself.
+
+        WA_MacAlwaysShowToolWindow covers hide-on-deactivate, but Qt has no
+        knob for Spaces or full-screen apps, so set those here as well. Best
+        effort -- a failure leaves the pill working in the ordinary case.
+        """
+        if sys.platform != "darwin" or self._native_configured:
+            return
+        try:
+            import ctypes
+
+            import objc
+
+            view = objc.objc_object(c_void_p=ctypes.c_void_p(int(self.winId())))
+            window = view.window()
+            if window is None:
+                return
+            window.setHidesOnDeactivate_(False)
+            window.setCollectionBehavior_(
+                (window.collectionBehavior() & ~_NS_MOVE_TO_ACTIVE_SPACE)
+                | _NS_CAN_JOIN_ALL_SPACES
+                | _NS_STATIONARY
+                | _NS_IGNORES_CYCLE
+                | _NS_FULL_SCREEN_AUXILIARY
+            )
+            self._native_configured = True
+        except Exception as exc:  # pragma: no cover - platform specific
+            log.debug("could not configure the pill's native window: %s", exc)
 
     def _place_on_active_screen(self) -> None:
         """Bottom-center of the screen the cursor is on -- dictation happens

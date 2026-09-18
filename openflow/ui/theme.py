@@ -85,9 +85,10 @@ CHART_COLORS = (INDIGO, BLUE, TEAL_A, GREEN_A, AMBER_A, CORAL, PINK)
 def tint(color: str) -> str:
     return TINTS.get(color, CARD_TINT)
 
-# The pill floats over arbitrary apps; it stays dark.
-PILL_BG = "#1C1E24"
-PILL_BORDER = "#2A2D36"
+# The pill floats over arbitrary apps; it stays black. The border is a hair
+# lighter so the capsule still has an edge over black windows.
+PILL_BG = "#000000"
+PILL_BORDER = "#1C1C1C"
 PILL_BAR = "#F2F3F5"
 
 STATE_COLOR = {
