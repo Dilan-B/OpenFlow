@@ -107,6 +107,12 @@ class OpenFlowApp:
         qt_app = QApplication.instance() or QApplication([])
         qt_app.setQuitOnLastWindowClosed(False)   # close-to-tray
 
+        # macOS aborts the process if pynput reads the keyboard layout off the
+        # main thread; snapshot it here, before the worker and hotkey threads.
+        from .input import macos_layout
+
+        macos_layout.install()
+
         # Claim the lock before opening the microphone or binding the hotkey:
         # a second instance must not touch either. If one is already running it
         # gets raised instead, so clicking the shortcut behaves as expected.
