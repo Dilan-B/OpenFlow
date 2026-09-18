@@ -16,15 +16,25 @@ blocks it until you approve it once.
    the app; click Done. Open **System Settings → Privacy & Security**, scroll
    down to the message about OpenFlow, click **Open Anyway**, and confirm.
    You only do this once per version.
-2. **Microphone.** macOS asks the first time you dictate; click Allow.
+2. **Microphone.** macOS asks when OpenFlow opens; click **Allow**. The app
+   waits for this answer before it finishes starting.
 3. **Accessibility** (typing into other apps) and **Input Monitoring** (the
-   global shortcut). Add OpenFlow under **System Settings → Privacy & Security**
-   in both lists, then quit OpenFlow from the menu bar icon and reopen it.
-   Permissions only apply after a restart of the app.
+   global shortcut). OpenFlow asks for both on launch. On each prompt click
+   **Open System Settings** and switch **OpenFlow** on. No restart needed: the
+   shortcut starts working in every app within a second of both being on.
+   Until then it only works while OpenFlow's own window is focused.
 
-Hold **Control + Cmd** to dictate. Because the app is not signed with an Apple
-Developer ID, macOS may ask for Accessibility and Input Monitoring again after
-you install a new version.
+Hold **Control + Cmd** to dictate.
+
+**After installing a new version:** the app is not signed with an Apple
+Developer ID, so macOS treats each version as a new app and the old grants stop
+applying. They can even stay switched on in System Settings while doing
+nothing. If the shortcut only works inside OpenFlow, clear the stale entries,
+then reopen OpenFlow and answer the prompts again:
+
+```bash
+tccutil reset Accessibility io.github.dilan-b.openflow && tccutil reset ListenEvent io.github.dilan-b.openflow
+```
 
 System-wide voice-to-text for Windows/macOS/Linux. Hold a hotkey, talk, release
 — cleaned-up text lands in whatever app had your cursor. Implements
@@ -39,7 +49,8 @@ The UI is Qt (PySide6), styled after Wispr Flow: warm cream canvas, white rounde
 transcriber should know — biases cloud recognition and fuzz-repairs local
 output: `open flo` → `OpenFlow`, but never touches real words like "grow"),
 **Snippets** (say a trigger, get the full text), **Style** (Wispr-style Flow
-Styles per app category: Formal, Casual, Very casual, Excited), **Transforms**
+Styles per app category: Formal, Casual, Very casual, Excited, plus Texting),
+**Transforms**
 (rewrite the Scratchpad: formal, shorter, bullets), **Scratchpad** (dictate
 long-form into the app itself), and **Settings**. Spoken punctuation works
 everywhere — see [Smart Formatting](#smart-formatting-and-flow-styles).
@@ -49,6 +60,13 @@ While you hold the shortcut, OpenFlow mutes every other app playing audio
 restores them the instant you release — apps you muted yourself stay muted.
 The recording pill (96×26, antialiased, fast-attack/slow-decay bar motion)
 appears on whichever monitor your cursor is on. Both are toggleable in Settings.
+On macOS the pill floats over other apps, every Space and full-screen apps.
+
+A soft two-note chime plays when recording starts (**Start sound** in
+Settings). **Texting mode** switches every app to texting style: no capitals,
+no periods or commas. Question marks, "I" and names stay. Turn it on in
+Settings or from the menu bar/tray icon's menu. See
+[Texting](#smart-formatting-and-flow-styles).
 
 ## Status
 
@@ -113,7 +131,9 @@ python -m openflow --install-shortcuts
   dictation text*; otherwise it shows word counts and timings.
 - **Engines** — a green dot per backend, so "why is it not using the cloud" is
   answerable at a glance.
-- **Settings** — start with Windows, close-to-tray, audio ducking, insert method.
+- **Settings** — start with Windows, close-to-tray, start sound, audio ducking,
+  Texting mode, insert method, and **AI models**: paste free Groq and Gemini
+  keys to turn on the cloud models.
 
 ### Speed
 
@@ -140,13 +160,24 @@ Settings to get the sub-350 ms path back.
 
 ### API keys (optional — everything falls back to local/deterministic)
 
+Free keys unlock the best models: [Groq](https://console.groq.com/keys) runs
+Whisper large-v3 for transcription and the AI cleanup pass, and
+[Gemini](https://aistudio.google.com/apikey) is a second cleanup engine.
+
+**macOS:** paste them into **Settings → AI models**. They are stored in your
+login Keychain and take effect immediately. A Mac app opened from the Dock
+never sees variables exported in a shell profile, so this is the way to set
+keys there.
+
+**Windows / environment:**
+
 ```bash
 setx GROQ_API_KEY "..."
 setx GEMINI_API_KEY "..."
 ```
 
-Keys are read from the environment only; they are never written to the config
-file.
+An environment variable wins over a saved key. Keys are never written to the
+config file, and *Copy diagnostics* reports only whether each is set.
 
 ### Local-only operation
 
@@ -479,7 +510,7 @@ text to accessibility just get the plain formatting.
 
 | Category | Apps | Styles |
 |---|---|---|
-| Personal messages | WhatsApp, Telegram, Discord, Instagram, Messages, Signal | Formal · Casual · Very casual |
+| Personal messages | WhatsApp, Telegram, Discord, Instagram, Messages, Signal | Formal · Casual · Very casual · Texting |
 | Work messages | Slack, Teams, Google Chat, LinkedIn | Formal · Casual · Excited |
 | Email | Gmail, Outlook, Superhuman, Apple Mail | Formal · Casual · Excited |
 | Everything else | — | Formal · Casual · Excited |
@@ -490,6 +521,14 @@ names: a capital is only lowered with positive evidence the word is ordinary
 (a common opener, a suffix like *-ing*, or the same word lowercase elsewhere),
 and Dictionary terms are always protected. Excited ends on an exclamation.
 Every category defaults to Formal, which is what OpenFlow did before styles.
+
+**Texting** is OpenFlow's own addition: no capitals at sentence starts and no
+periods or commas. *"Hey, what's up? I'm running late. See you at 7."* becomes
+*"hey what's up? I'm running late see you at 7"*. Question and exclamation
+marks, "I", acronyms, Dictionary names, decimals, `1,250`, `U.S.`, URLs and
+ellipses are kept. Lists and code/terminal apps are left alone. Pick it as the
+Personal messages style, or turn on **Texting mode** (Settings, or the menu
+bar/tray menu) to apply it in every app.
 
 Check it from the command line:
 
@@ -627,9 +666,10 @@ Conflating the first two is what let the broken shortcut go unnoticed.
   The same applies to any trigger — keystrokes are not swallowed, so pick a
   chord your apps don't already use. Ctrl+Win is chosen because it's inert on
   Windows: holding Ctrl suppresses the Start menu a bare Win keyup would open.
-- The macOS build is packaged and smoke-tested in CI, but that only proves it
-  launches: CI can't grant permissions or hear a microphone, so dictation on a
-  real Mac is untested. Muting other apps while dictating is Windows-only, the
+- The macOS build is packaged and smoke-tested in CI, and dictation has been
+  used on a real Mac (macOS 27, Apple Silicon). It is ad-hoc signed, so every
+  update needs Microphone, Accessibility and Input Monitoring granted again
+  (see [First launch on macOS](#first-launch-on-macos)). Muting other apps while dictating is Windows-only, the
   sidebar icons use a Windows font (Segoe Fluent), and "Start with Windows"
   does nothing on a Mac. From a source checkout, Accessibility and Microphone
   permissions go to the terminal running Python instead of the app.
