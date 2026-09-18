@@ -106,10 +106,14 @@ class SavedKeys(unittest.TestCase):
         with mock.patch.object(keys, "supported", return_value=True), \
                 mock.patch("subprocess.run", return_value=done) as run:
             keys.save("GROQ_API_KEY", "gsk_abcdefghijklmnop")
-        args, kwargs = run.call_args
-        self.assertEqual(args[0], ["security", "-i"])
-        self.assertIn("gsk_abcdefghijklmnop", kwargs["input"])
-        self.assertEqual(keys.load("GROQ_API_KEY"), "gsk_abcdefghijklmnop")
+            args, kwargs = run.call_args
+            self.assertEqual(args[0], ["security", "-i"])
+            self.assertNotIn("gsk_abcdefghijklmnop", " ".join(args[0]))
+            self.assertIn("gsk_abcdefghijklmnop", kwargs["input"])
+            # Served from the cache the save filled, without another lookup.
+            run.reset_mock()
+            self.assertEqual(keys.load("GROQ_API_KEY"), "gsk_abcdefghijklmnop")
+            run.assert_not_called()
 
     def test_unsupported_platform_reads_nothing(self):
         with mock.patch.object(keys, "supported", return_value=False), \
