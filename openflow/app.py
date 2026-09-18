@@ -32,6 +32,7 @@ from .formatting import classify, smart_format
 from .history import Entry, History
 from .input.caret import CaretReader, copy_selection
 from .input.hotkeys import HotkeyListener, HotkeyUnavailable
+from .input import macos_permissions
 from .input.injector import Injector
 from .llm.cleaner import LLMCleaner
 from .llm.quota import QuotaLedger
@@ -92,6 +93,10 @@ class OpenFlowApp:
         self.single_instance = None
         self.paused = False
         self._hotkeys_reported_dead = False
+        # macOS: waiting on Accessibility / Input Monitoring. See
+        # input/macos_permissions.py and _check_permissions.
+        self._awaiting_permissions = False
+        self._permissions_checked_at = 0.0
         self._events: queue.Queue = queue.Queue()
         self._jobs: queue.Queue = queue.Queue()
         self._stop = threading.Event()
@@ -179,6 +184,12 @@ class OpenFlowApp:
         except HotkeyUnavailable as exc:
             log.error("hotkey listener unavailable: %s", exc)
             return EXIT_NO_HOTKEY
+
+        # Without these the hotkey only works while OpenFlow is focused, and
+        # macOS will not list the app to switch on until it has asked.
+        if not macos_permissions.trusted():
+            self._awaiting_permissions = True
+            macos_permissions.request()
 
         self.tray.start()
         self._refresh_engines()
@@ -645,6 +656,7 @@ class OpenFlowApp:
             self._handle(kind, payload)
 
         self._check_hotkeys_alive()
+        self._check_permissions()
 
         if self.window.isVisible():
             self.window.push_input_level(self.recorder.level)
@@ -655,6 +667,26 @@ class OpenFlowApp:
                 log.warning("recording hit max_seconds; finishing early")
                 self._on_hotkey_stop()
         self.overlay.tick()
+
+    def _check_permissions(self) -> None:
+        """Once macOS grants access, restart the listener so the hotkey works
+        in every app straight away -- pynput decides what its event tap can
+        see when it starts, so the running one would stay blind."""
+        if not self._awaiting_permissions or self.hotkeys is None:
+            return
+        now = time.monotonic()
+        if now - self._permissions_checked_at < 1.0:
+            return
+        self._permissions_checked_at = now
+        if not macos_permissions.trusted():
+            return
+        self._awaiting_permissions = False
+        log.info("permissions granted; restarting the hotkey listener")
+        self.hotkeys.stop()
+        try:
+            self.hotkeys.start()
+        except HotkeyUnavailable as exc:
+            log.error("hotkey listener unavailable: %s", exc)
 
     def _check_hotkeys_alive(self) -> None:
         """A dead pynput thread is indistinguishable from an idle app: no
