@@ -80,7 +80,7 @@ class ModelSeesWordsTheRulesWouldDelete(unittest.TestCase):
             def available(self):
                 return True
 
-            def complete(self, system, user, *, strict=True):
+            def complete(self, system, user, *, strict=True, allowed=frozenset()):
                 seen.append(user)
                 return user
 

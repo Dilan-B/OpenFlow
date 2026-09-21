@@ -19,7 +19,7 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 # time. Without this, a config written on day one pins every default it ever
 # saw -- which is how an install kept transcribing with whisper-large-v3-turbo
 # and the cleanup pass switched off, months after both defaults had changed.
-SCHEMA = 3
+SCHEMA = 4
 
 
 @dataclass(slots=True)
@@ -49,12 +49,15 @@ class AudioConfig:
     sample_rate: int = 16_000      # what Whisper wants; no resampling needed
     channels: int = 1
     block_ms: int = 30
-    max_seconds: int = 120         # hard stop so a stuck key cannot eat the disk
+    # Hard stop so a stuck key cannot record forever. 20 minutes, like Wispr:
+    # long prompts are the point, and the router splits anything past
+    # stt.chunk_seconds into pieces every backend can take.
+    max_seconds: int = 1200
     input_device: int | None = None
     # Mute other apps (Spotify, videos, calls) while recording and restore
     # them the moment you let go, via the Windows volume mixer sessions.
     duck_others: bool = True
-    # A short soft chime when recording starts (audio/chime.py).
+    # Soft pops when recording starts and stops (audio/chime.py).
     start_sound: bool = True
 
 
@@ -91,7 +94,20 @@ class SttConfig:
     # round-trip we are already paying, so the speed buys nothing a user feels
     # while the errors are ones they read.
     groq_model: str = "whisper-large-v3"
+    # The primary spoken language; "" means detect. See ``languages``.
     language: str = "en"
+    # Every language the speaker uses, Wispr-style ("add not just one, but
+    # every language you speak"). Two or more switches the cloud engines to
+    # detection restricted to this set. Empty means just ``language``.
+    languages: list[str] = field(default_factory=list)
+    # Paid engines (models.tier == "pro"). gpt-transcribe takes a prompt and
+    # keywords; Deepgram nova-3 takes key terms.
+    openai_model: str = "gpt-transcribe"
+    deepgram_model: str = "nova-3"
+    # Audio longer than this is split at a pause and transcribed in pieces
+    # (in parallel for cloud engines). Keeps every request under the 25 MB
+    # upload caps and keeps a 20-minute dictation from being one slow request.
+    chunk_seconds: int = 240
 
 
 @dataclass(slots=True)
@@ -141,6 +157,12 @@ class LlmConfig:
     # before this default changed keeps the old name forever, which is how
     # a dead gemini-1.5-flash can outlive the code that stopped naming it.
     gemini_model: str = "gemini-flash-lite-latest"
+    # Paid cleanup engines (models.tier == "pro").
+    openai_model: str = "gpt-5.6-luna"
+    anthropic_model: str = "claude-opus-5"
+    # Cleanup is a light edit, and every token of thinking is latency the
+    # speaker waits through, so the default is the lowest effort.
+    anthropic_effort: str = "low"
     timeout_s: float = 6.0
     # Warm-up runs off the dictation path, so it can wait out a cold load;
     # measured ~18 s for llama3.1:8b, against which timeout_s never stood a
@@ -173,6 +195,59 @@ class LlmConfig:
     # pass cannot know it mis-handled a sentence -- that is precisely the class
     # of error it has no rule for. Set True to trade quality back for latency.
     only_when_uncertain: bool = False
+
+
+@dataclass(slots=True)
+class ModelsConfig:
+    """Free models (Groq/Gemini free tiers, local fallbacks) or paid ones.
+
+    "pro" puts the chosen paid engines at the front of both chains, lifts the
+    free-tier quotas, and gives cleanup the full context-aware prompt that a
+    large model can follow -- see stt_chain / llm_chain below.
+    """
+
+    tier: str = "free"                 # free | pro
+    # "" = best available paid engine with a key.
+    transcription: str = ""            # openai | deepgram | groq
+    cleanup: str = ""                  # anthropic | openai | groq | gemini
+    # A paid Groq plan: no free-tier request/audio limits on Groq.
+    groq_paid: bool = False
+
+
+PAID_STT = ("openai", "deepgram")
+PAID_LLM = ("anthropic", "openai")
+
+
+def stt_chain(cfg: "Config") -> list[str]:
+    """Transcription backends in the order to try them."""
+    chain = list(cfg.stt.backends)
+    if cfg.models.tier != "pro":
+        return chain
+    first = [cfg.models.transcription] if cfg.models.transcription else list(PAID_STT)
+    return first + [name for name in chain if name not in first]
+
+
+def llm_chain(cfg: "Config") -> list[str]:
+    """Cleanup backends in the order to try them. "rules" stays last."""
+    chain = list(cfg.llm.backends)
+    if cfg.models.tier != "pro":
+        return chain
+    first = [cfg.models.cleanup] if cfg.models.cleanup else list(PAID_LLM)
+    return first + [name for name in chain if name not in first]
+
+
+def unlimited(cfg: "Config", quota_key: str) -> bool:
+    """True when a backend's free-tier ceiling does not apply to this user."""
+    if cfg.models.tier != "pro":
+        return False
+    return not quota_key.startswith("groq") or cfg.models.groq_paid
+
+
+def languages(cfg: "Config") -> list[str]:
+    """The speaker's languages, primary first; [] means detect anything."""
+    ordered = [cfg.stt.language] if cfg.stt.language else []
+    ordered += [code for code in cfg.stt.languages if code and code not in ordered]
+    return ordered
 
 
 @dataclass(slots=True)
@@ -290,6 +365,7 @@ class Config:
     commands: CommandConfig = field(default_factory=CommandConfig)
     updates: UpdateConfig = field(default_factory=UpdateConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
+    models: ModelsConfig = field(default_factory=ModelsConfig)
     # Which set of defaults this file was written against. 0 means "predates
     # migrations"; see SCHEMA and _migrate.
     schema: int = 0
@@ -363,6 +439,12 @@ def _migrate(cfg: "Config") -> None:
                 if style == "formal":
                     cfg.formatting.styles[category] = "casual"
         cfg.schema = 3
+    if cfg.schema < 4:
+        # The two-minute cap was the old default, not a choice: long prompts
+        # are a headline feature now that long audio is chunked.
+        if cfg.audio.max_seconds == 120:
+            cfg.audio.max_seconds = AudioConfig().max_seconds
+        cfg.schema = 4
 
 
 def _legacy_style() -> str:
@@ -388,7 +470,7 @@ def _apply(target, data: dict) -> None:
 
 def api_key(name: str) -> str | None:
     """Read a provider key: the environment first, then one saved from the
-    Settings page (the macOS Keychain -- see keys.py).
+    Settings page (Keychain / Credential Manager -- see keys.py).
 
     Keys are never stored in the config file.
     """

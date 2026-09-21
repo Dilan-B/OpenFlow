@@ -96,10 +96,12 @@ class QuotaLedger:
             self._roll_day()
             return self._counts.get(provider, 0)
 
-    def has_headroom(self, provider: str, limit: int | None) -> bool:
+    def has_headroom(self, provider: str, limit: int | None, wanted: int = 1) -> bool:
+        """Room for ``wanted`` more requests today (a chunked recording
+        makes one per piece)."""
         if not limit:
             return True
-        return self.used(provider) < limit
+        return self.used(provider) + wanted <= limit
 
     def record(self, provider: str, audio_seconds: float = 0.0) -> None:
         with self._lock:

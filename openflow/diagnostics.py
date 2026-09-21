@@ -16,7 +16,14 @@ import platform
 import sys
 from pathlib import Path
 
-from .config import CONFIG_DIR, Config, api_key
+from .config import CONFIG_DIR, Config, api_key, languages, llm_chain, stt_chain
+
+
+def _key_names() -> tuple[str, ...]:
+    from .keys import KNOWN
+
+    return tuple(KNOWN)
+
 
 LOG_LINES = 60
 
@@ -57,7 +64,7 @@ def _backend_status(config: Config) -> list[str]:
     try:
         from .stt.engines import build_engine
 
-        for name in config.stt.backends:
+        for name in stt_chain(config):
             try:
                 engine = build_engine(name, config)
                 ready = "ready" if engine.available() else "unavailable"
@@ -115,17 +122,19 @@ def collect(config: Config | None = None) -> str:
 
     section("Settings")
     lines.append(f"  hotkey             {config.hotkey.trigger} ({config.hotkey.mode})")
-    lines.append(f"  stt backends       {', '.join(config.stt.backends)}")
+    lines.append(f"  model tier         {config.models.tier}"
+                 f"{' (paid Groq)' if config.models.groq_paid else ''}")
+    lines.append(f"  stt backends       {', '.join(stt_chain(config))}")
     lines.append(f"  stt device         {config.stt.device}")
-    lines.append(f"  language           {config.stt.language or 'auto'}")
+    lines.append(f"  languages          {', '.join(languages(config)) or 'auto'}")
     lines.append(f"  llm enabled        {config.llm.enabled}")
-    lines.append(f"  llm backends       {', '.join(config.llm.backends)}")
+    lines.append(f"  llm backends       {', '.join(llm_chain(config))}")
     lines.append(f"  injection          {config.injection.method}")
     lines.append(f"  duck others        {config.audio.duck_others}")
     lines.append(f"  log transcripts    {config.log_transcripts}")
     # Never print a key, but say which are present so "why is the cloud path
     # not used" answers itself.
-    for env in ("GROQ_API_KEY", "GEMINI_API_KEY"):
+    for env in _key_names():
         lines.append(f"  {env:<18} {'set' if api_key(env) else 'not set'}")
 
     section("Backends")

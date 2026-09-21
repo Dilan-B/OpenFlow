@@ -49,6 +49,13 @@ PROFILES: dict[str, Profile] = {
         plain_punctuation=True,
         description="Bare commands -- a full stop would be a syntax error",
     ),
+    # AI-first editors, where dictation mostly lands in a chat panel as a
+    # prompt ("Can you look at @auth.ts?"). Wispr writes prose there, so this
+    # is prose with straight quotes -- not the lowercase, unpunctuated "code".
+    "ide": Profile(
+        name="ide", plain_punctuation=True,
+        description="Prose with straight quotes, for AI chat in the editor",
+    ),
     "chat": Profile(
         name="chat", terminal_punctuation=False, capitalize=True,
         description="No trailing full stop, the way people write in chat",
@@ -69,9 +76,13 @@ APP_PROFILES: dict[str, str] = {
     "iterm2": "shell",
     "gnome-terminal": "shell",
     # Editors and IDEs
-    "code.exe": "code",
-    "code - insiders.exe": "code",
-    "cursor.exe": "code",
+    "code.exe": "ide",
+    "code - insiders.exe": "ide",
+    "cursor.exe": "ide",
+    "windsurf.exe": "ide",
+    "cursor": "ide",                  # macOS
+    "code": "ide",
+    "windsurf": "ide",
     "devenv.exe": "code",
     "idea64.exe": "code",
     "pycharm64.exe": "code",
@@ -79,7 +90,7 @@ APP_PROFILES: dict[str, str] = {
     "rider64.exe": "code",
     "clion64.exe": "code",
     "sublime_text.exe": "code",
-    "zed.exe": "code",
+    "zed.exe": "ide",
     "notepad++.exe": "code",
     # Chat
     "slack.exe": "chat",

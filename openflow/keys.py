@@ -26,7 +26,12 @@ SERVICE = "OpenFlow"
 KNOWN = {
     "GROQ_API_KEY": ("Groq", "https://console.groq.com/keys"),
     "GEMINI_API_KEY": ("Gemini", "https://aistudio.google.com/apikey"),
+    # Paid (models.tier == "pro").
+    "OPENAI_API_KEY": ("OpenAI", "https://platform.openai.com/api-keys"),
+    "ANTHROPIC_API_KEY": ("Claude", "https://console.anthropic.com/settings/keys"),
+    "DEEPGRAM_API_KEY": ("Deepgram", "https://console.deepgram.com/"),
 }
+FREE = ("GROQ_API_KEY", "GEMINI_API_KEY")
 
 # Provider keys are URL-safe tokens. Anything else is a paste accident, and
 # refusing it also keeps the value safe to quote for ``security -i`` below.

@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z]+)*|\d+(?::\d+)?|[^\sA-Za-z0-9]")
+# Clock times first: the word alternative would otherwise take "5" and leave
+# ":30" to be spaced as punctuation ("5: 30").
+_TOKEN_RE = re.compile(r"\d+(?::\d+)+|[A-Za-z0-9]+(?:['’][A-Za-z]+)*|[^\sA-Za-z0-9]")
 
 SENTENCE_ENDERS = frozenset({".", "!", "?"})
 CLAUSE_BREAKS = frozenset({",", ";", ":", "--", "—"})

@@ -196,8 +196,10 @@ def _self_test(parser: argparse.ArgumentParser) -> int:
 
     # 3. Modules PyInstaller has to have collected. An import that only fails
     #    in the bundle is the other classic packaging break.
+    # anthropic is imported only when a Pro cleanup runs, so a missing
+    # bundle would otherwise surface as "Claude unavailable" on the first one.
     for module in ("PySide6.QtWidgets", "sounddevice", "numpy", "pynput",
-                   "pyperclip", "PIL", "onnx_asr"):
+                   "pyperclip", "PIL", "onnx_asr", "anthropic"):
         try:
             importlib.import_module(module)
             check(f"import {module}", True)

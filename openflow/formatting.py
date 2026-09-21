@@ -291,6 +291,45 @@ def _fit_to_context(text: str, context: CaretContext, protected: set[str]) -> st
     return text
 
 
+# ---------------------------------------------------------------------------
+# Email layout
+# ---------------------------------------------------------------------------
+_GREETING = re.compile(
+    r"^((?:hi|hey|hello|dear|good (?:morning|afternoon|evening)|greetings)"
+    r"(?:\s+[A-Z][\w'’\-]*){0,3}\s*),\s+(?=\S)", re.IGNORECASE)
+_SIGN_OFF = re.compile(
+    r"(?:(?<=[.!?])|(?<=[.!?][\"”]))\s+((?:many |best |kind |warm )?(?:thanks|thank you|"
+    r"best|cheers|regards|sincerely|talk soon|all the best|best wishes|warmly|"
+    r"take care)(?: so much)?)[,.!]?\s+([A-Z][\w'’\-]*(?:\s+[A-Z][\w'’\-]*)?)[.!]?$",
+    re.IGNORECASE)
+
+
+def layout_email(text: str) -> str:
+    """Put the greeting and the sign-off on their own lines, the way an email
+    is written: "Hey Sahed,\n\nThere's three things...\n\nThanks,\nDilan".
+
+    Only line breaks are added; no word changes. A message with no greeting
+    and no sign-off is returned as it came.
+    """
+    out = text.strip()
+    if "\n" in out and ("\n\n" in out[:80]):
+        return text                       # already laid out (by the model)
+    greeting = _GREETING.match(out)
+    if greeting and len(out) > greeting.end() + 3:
+        body = out[greeting.end():]
+        out = greeting.group(1).strip() + ",\n\n" + body[:1].upper() + body[1:]
+    sign_off = _SIGN_OFF.search(out)
+    if sign_off and sign_off.start() > 0:
+        phrase = sign_off.group(1)
+        out = (out[:sign_off.start()].rstrip() + "\n\n"
+               + phrase[:1].upper() + phrase[1:] + ",\n" + sign_off.group(2))
+    return out
+
+
+_ABBREVIATION_THEN_MARK = re.compile(r"(\b[AaPp][Mm])\.(?=[?!])")
+_DOTTED_TIME = re.compile(r"\b(\d{1,2})\.([0-5]\d)\s*([AaPp]\.?[Mm]\b\.?)")
+
+
 def smart_format(
     text: str,
     *,
@@ -309,7 +348,11 @@ def smart_format(
     if not text or not text.strip():
         return text
     protected = {t.lower() for t in protected_terms}
-    out = text
+    # "5:30 PM.?" -- an abbreviation's own period followed by the sentence's
+    # question mark. The question mark wins.
+    out = _ABBREVIATION_THEN_MARK.sub(r"\1", text)
+    # "5.30 PM" -- a transcriber's dotted clock time before am/pm.
+    out = _DOTTED_TIME.sub(r"\1:\2 \3", out)
 
     is_shell = profile.name == "shell"
     if smart and not is_shell:
@@ -322,6 +365,8 @@ def smart_format(
     # dropping the full stop; with it on, the messaging rule below does that.
     if profile.name in ("code", "shell") or (not smart and profile.name == "chat"):
         out = apply_profile(out, profile)
+    elif profile.name == "ide":
+        out = apply_profile(out, profile)       # straight quotes, prose otherwise
     else:
         if texting:
             style = TEXTING
@@ -344,6 +389,10 @@ def smart_format(
             drop = True
         if drop and not is_list:
             out = _drop_trailing_period(out)
+        at_start = context is None or not context.before.strip() \
+            or context.before.endswith("\n")
+        if smart and kind.category == EMAIL and style != TEXTING and at_start:
+            out = layout_email(out)
 
     if smart and context is not None:
         out = _fit_to_context(out, context, protected)

@@ -1,8 +1,11 @@
-"""LLM backends: local Ollama and the Google AI Studio free tier.
+"""LLM backends.
 
-Both speak plain HTTP through ``urllib`` -- no SDK, no extra dependency, and no
-import cost on startup, which matters because the hotkey listener has to be
-responsive the moment the app launches.
+Free: Groq and the Google AI Studio tier, plus local Ollama -- plain HTTP
+through ``urllib``, no SDK and no import cost on startup, which matters
+because the hotkey listener has to be responsive the moment the app launches.
+
+Paid (models.tier == "pro"): Claude through the official ``anthropic`` SDK,
+imported only when a Claude cleanup actually runs, and OpenAI over HTTP.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import urllib.request
 
 from ..config import Config, api_key
 from .base import Provider, ProviderError, sanitize
-from .prompts import FEW_SHOT, build_system_prompt
+from .prompts import FEW_SHOT, build_system_prompt, context_section
 
 # Probing a dead Ollama costs a full connect timeout, and it sits directly on
 # the dictation path. Cache the answer: a miss is re-checked occasionally so a
@@ -48,6 +51,18 @@ def _post(url: str, payload: dict, timeout: float, headers: dict | None = None) 
         raise ProviderError(str(exc)) from exc
     except json.JSONDecodeError as exc:
         raise ProviderError(f"malformed response: {exc}") from exc
+
+
+def output_budget(text: str) -> int:
+    """Tokens to allow for the edited text: a little over the input's own
+    length (~0.75 words per token), never less than the old fixed 512."""
+    return max(512, int(len(text.split()) * 2.2) + 64)
+
+
+def scaled_timeout(base: float, text: str) -> float:
+    """The configured timeout suits a sentence; a long dictation gets one
+    extra second per ~60 words of output to write."""
+    return base + len(text.split()) / 60.0
 
 
 class OllamaProvider:
@@ -136,7 +151,8 @@ class OllamaProvider:
             timeout=timeout_s,
         )
 
-    def complete(self, system: str, user: str, *, strict: bool = True) -> str:
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str:
         messages: list[dict] = [{"role": "system", "content": system}]
         # Few-shot pairs keep small models in editing mode (PRD section 5).
         # Two is the useful minimum: one correction, one leave-it-alone. Every
@@ -158,14 +174,15 @@ class OllamaProvider:
                 "options": {
                     "temperature": self.cfg.temperature,
                     "top_p": 0.9,
-                    "num_predict": 256,
+                    "num_predict": output_budget(user),
                     # Deterministic edits: no creative sampling.
                     "repeat_penalty": 1.0,
                 },
             },
-            timeout=self.cfg.timeout_s,
+            timeout=scaled_timeout(self.cfg.timeout_s, user),
         )
-        return sanitize(data.get("message", {}).get("content", ""), original=user, strict=strict)
+        return sanitize(data.get("message", {}).get("content", ""), original=user,
+                        strict=strict, allowed=allowed)
 
 
 class GroqProvider:
@@ -210,7 +227,8 @@ class GroqProvider:
             return reason[:110]
         return None
 
-    def complete(self, system: str, user: str, *, strict: bool = True) -> str:
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str:
         if not self.key:
             raise ProviderError("GROQ_API_KEY is not set")
         messages: list[dict] = [{"role": "system", "content": system}]
@@ -223,7 +241,7 @@ class GroqProvider:
             "model": self.model,
             "messages": messages,
             "temperature": self.cfg.temperature,
-            "max_tokens": 512,
+            "max_tokens": output_budget(user),
             "stream": False,
         }
         # gpt-oss models reason before answering. Editing a sentence needs none
@@ -234,14 +252,14 @@ class GroqProvider:
         data = _post(
             self.url,
             payload,
-            timeout=self.cfg.timeout_s,
+            timeout=scaled_timeout(self.cfg.timeout_s, user),
             headers={"Authorization": f"Bearer {self.key}"},
         )
         try:
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as exc:
             raise ProviderError(f"unexpected response shape: {exc}") from exc
-        return sanitize(text or "", original=user, strict=strict)
+        return sanitize(text or "", original=user, strict=strict, allowed=allowed)
 
 
 class GeminiProvider:
@@ -279,7 +297,8 @@ class GeminiProvider:
             return reason[:110]
         return None
 
-    def complete(self, system: str, user: str, *, strict: bool = True) -> str:
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str:
         if not self.key:
             raise ProviderError("GEMINI_API_KEY is not set")
         data = _post(
@@ -289,21 +308,159 @@ class GeminiProvider:
                 "contents": [{"role": "user", "parts": [{"text": user}]}],
                 "generationConfig": {
                     "temperature": self.cfg.temperature,
-                    "maxOutputTokens": 1024,
+                    "maxOutputTokens": output_budget(user),
                     "candidateCount": 1,
                 },
             },
-            timeout=self.cfg.timeout_s,
+            timeout=scaled_timeout(self.cfg.timeout_s, user),
             headers={"x-goog-api-key": self.key},
         )
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError) as exc:
             raise ProviderError(f"unexpected response shape: {exc}") from exc
-        return sanitize(text, original=user, strict=strict)
+        return sanitize(text, original=user, strict=strict, allowed=allowed)
+
+
+class OpenAIProvider:
+    """OpenAI chat completions (paid). The GPT-5.6 family reasons by default;
+    editing a sentence needs none of it, so reasoning is turned off -- every
+    reasoning token is latency the speaker waits through."""
+
+    name = "openai"
+    is_local = False
+    small = False
+    paid = True
+    url = "https://api.openai.com/v1/chat/completions"
+
+    def __init__(self, config: Config) -> None:
+        self.cfg = config.llm
+        self.model = self.cfg.openai_model
+        self.key = api_key("OPENAI_API_KEY")
+
+    def available(self) -> bool:
+        return bool(self.key)
+
+    def verify(self) -> str | None:
+        if not self.key:
+            return "OPENAI_API_KEY is not set"
+        try:
+            self.complete("Reply with the single word: ok", "ok", strict=False)
+        except ProviderError as exc:
+            return " ".join(str(exc).split())[:110]
+        return None
+
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str:
+        if not self.key:
+            raise ProviderError("OPENAI_API_KEY is not set")
+        messages: list[dict] = [{"role": "system", "content": system}]
+        for example_in, example_out in FEW_SHOT:
+            messages.append({"role": "user", "content": example_in})
+            messages.append({"role": "assistant", "content": example_out})
+        messages.append({"role": "user", "content": user})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": output_budget(user),
+        }
+        if self.model.startswith(("gpt-5", "gpt-6", "o")):
+            payload["reasoning_effort"] = "none" if self.model.startswith("gpt-5.6") else "low"
+        data = _post(self.url, payload, timeout=scaled_timeout(self.cfg.timeout_s, user),
+                     headers={"Authorization": f"Bearer {self.key}"})
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise ProviderError(f"unexpected response shape: {exc}") from exc
+        return sanitize(text or "", original=user, strict=strict, allowed=allowed)
+
+
+class AnthropicProvider:
+    """Claude through the official SDK (paid).
+
+    Defaults to claude-opus-5 at effort "low": cleanup is a light edit, and
+    thinking is latency. The server-side refusal fallback is on, so a request
+    one model declines is re-run on another inside the same call instead of
+    costing the speaker their dictation.
+    """
+
+    name = "anthropic"
+    is_local = False
+    small = False
+    paid = True
+
+    def __init__(self, config: Config) -> None:
+        self.cfg = config.llm
+        self.model = self.cfg.anthropic_model
+        self.key = api_key("ANTHROPIC_API_KEY")
+
+    def available(self) -> bool:
+        return bool(self.key)
+
+    def verify(self) -> str | None:
+        if not self.key:
+            return "ANTHROPIC_API_KEY is not set"
+        try:
+            self.complete("Reply with the single word: ok", "ok", strict=False)
+        except ProviderError as exc:
+            return " ".join(str(exc).split())[:110]
+        return None
+
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str:
+        if not self.key:
+            raise ProviderError("ANTHROPIC_API_KEY is not set")
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise ProviderError("the anthropic package is not installed") from exc
+
+        messages: list[dict] = []
+        for example_in, example_out in FEW_SHOT:
+            messages.append({"role": "user", "content": example_in})
+            messages.append({"role": "assistant", "content": example_out})
+        messages.append({"role": "user", "content": user})
+
+        client = anthropic.Anthropic(
+            api_key=self.key, max_retries=1,
+            timeout=scaled_timeout(self.cfg.timeout_s, user) + 4.0)
+        request = dict(
+            model=self.model,
+            max_tokens=max(1024, output_budget(user)),
+            # The system prompt and few-shot pairs are identical on every
+            # dictation; cache them.
+            system=[{"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+            output_config={"effort": self.cfg.anthropic_effort},
+        )
+        try:
+            if self.model in ("claude-opus-5", "claude-fable-5-1"):
+                response = client.beta.messages.create(
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default", **request)
+            else:
+                response = client.messages.create(**request)
+        except anthropic.RateLimitError as exc:
+            raise ProviderError(f"HTTP 429: {exc.message}") from exc
+        except anthropic.APIStatusError as exc:
+            raise ProviderError(f"HTTP {exc.status_code}: {exc.message}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise ProviderError(f"connection failed: {exc}") from exc
+
+        if response.stop_reason == "refusal":
+            raise ProviderError("the model declined this request")
+        if response.stop_reason == "max_tokens":
+            raise ProviderError("completion cut off at max_tokens")
+        text = "".join(block.text for block in response.content if block.type == "text")
+        return sanitize(text, original=user, strict=strict, allowed=allowed)
 
 
 def build_provider(name: str, config: Config) -> Provider:
+    if name == "anthropic":
+        return AnthropicProvider(config)
+    if name == "openai":
+        return OpenAIProvider(config)
     if name == "ollama":
         return OllamaProvider(config)
     if name == "gemini":
@@ -313,7 +470,8 @@ def build_provider(name: str, config: Config) -> Provider:
     raise ValueError(f"unknown LLM provider: {name}")
 
 
-def system_prompt_for(provider: Provider) -> str:
+def system_prompt_for(provider: Provider, context=None, *, category: str = "",
+                      language: str | None = None) -> str:
     # "small" is the real question the supplement answers -- will this model
     # rewrite when asked to edit? Local models all do; so does a 20B cloud one.
     # Default to is_local so providers that never set it keep their behaviour.
@@ -336,4 +494,7 @@ def system_prompt_for(provider: Provider) -> str:
     taught = corrections().prompt_hint()
     if taught:
         parts.append(taught)
+    section = context_section(context, category=category, language=language, large=not small)
+    if section:
+        parts.append(section)
     return "\n\n".join(parts)

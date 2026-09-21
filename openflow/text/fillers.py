@@ -17,6 +17,11 @@ def _is_discourse_position(tokens: list[Token], begin: int, end: int) -> bool:
     after = tokens[end] if end < len(tokens) else None
     opens = before is None or before.is_clause_break or before.is_sentence_end
     closes = after is None or after.is_clause_break or after.is_sentence_end
+    # A soft filler that merely ends the utterance is the last word of the
+    # sentence, not a tag: "it gets names right". The tag form is set off by
+    # a comma -- "that's the plan, right" -- and that still counts.
+    if after is None and before is not None and before.is_word:
+        closes = False
     return opens or closes
 
 

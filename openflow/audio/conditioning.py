@@ -46,6 +46,37 @@ TRIM_FLOOR = 0.02        # normalized-domain: envelope below this is silence
 SILENCE_RMS = 0.0015     # ~3x the measured ambient floor of a quiet mic
 SILENCE_PEAK = 0.02      # speech transients clear this comfortably
 
+# Whispering. Wispr's pitch is that you can whisper "extremely quietly" into
+# the mic and still get text. A whisper has no voicing, so its level can sit
+# under both absolute gates above -- but it still rises well clear of the
+# room's own noise. So speech is also recognised by contrast: the loud frames
+# of the clip against its quietest ones.
+SPEECH_CONTRAST = 4.0    # ~12 dB between the speech body and the noise floor
+MIN_REFERENCE = 0.0002   # below this there is nothing to amplify but hiss
+
+
+def _frame_levels(samples, sample_rate: int):
+    import numpy as np
+
+    window = max(1, int(sample_rate * 0.02))
+    usable = (len(samples) // window) * window
+    if usable < window * 5:
+        return None
+    frames = np.asarray(samples[:usable], dtype=np.float32).reshape(-1, window)
+    return np.sqrt(np.mean(frames**2, axis=1))
+
+
+def contrast(audio, sample_rate: int) -> float:
+    """Speech body (95th percentile frame level) over noise floor (10th)."""
+    import numpy as np
+
+    levels = _frame_levels(audio, sample_rate)
+    if levels is None:
+        return 0.0
+    floor = float(np.percentile(levels, 10))
+    body = float(np.percentile(levels, 95))
+    return body / max(floor, 1e-7)
+
 
 def condition(audio, sample_rate: int):
     """Return ``audio`` DC-corrected, normalized, and silence-trimmed."""
@@ -67,7 +98,8 @@ def condition(audio, sample_rate: int):
     #    the decoder tries to transcribe.
     magnitude = np.abs(samples)
     reference = float(np.percentile(magnitude, NORMALIZE_PERCENTILE)) if samples.size else 0.0
-    if reference > 0.002:
+    if reference > 0.002 or (reference > MIN_REFERENCE
+                             and contrast(samples, sample_rate) >= SPEECH_CONTRAST):
         #    Limit the outliers instead of letting them hold the gain down.
         #    Capping the gain so a lone click stays unclipped would leave every
         #    other sample as quiet as it started -- the click wins and the
@@ -111,8 +143,12 @@ def is_silent(audio, sample_rate: int) -> bool:
     This is deliberately not a "was there speech" test. Microphone gain spans
     more than an order of magnitude across devices, so any threshold high
     enough to judge *content* will silently swallow somebody's real voice.
+    A whisper can be quieter than both gates; its contrast against the room
+    noise still gives it away.
     """
     if audio is None or len(audio) < sample_rate * 0.1:
         return True
     rms, peak = measure(audio)
-    return rms < SILENCE_RMS and peak < SILENCE_PEAK
+    if rms >= SILENCE_RMS or peak >= SILENCE_PEAK:
+        return False
+    return rms < MIN_REFERENCE / 2 or contrast(audio, sample_rate) < SPEECH_CONTRAST
