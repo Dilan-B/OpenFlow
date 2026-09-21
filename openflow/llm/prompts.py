@@ -95,3 +95,66 @@ FEW_SHOT: tuple[tuple[str, str], ...] = (
 
 def build_system_prompt(*, local: bool) -> str:
     return SYSTEM_PROMPT + (LOCAL_MODEL_SUPPLEMENT if local else "")
+
+
+LANGUAGE_LABELS = {
+    "en": "English", "es": "Spanish", "fr": "French", "de": "German",
+    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "pl": "Polish",
+    "ru": "Russian", "uk": "Ukrainian", "hi": "Hindi", "gu": "Gujarati",
+    "zh": "Chinese", "ja": "Japanese", "ko": "Korean", "ar": "Arabic",
+    "tr": "Turkish", "vi": "Vietnamese", "sv": "Swedish", "da": "Danish",
+}
+
+# How many project files and identifiers to name in the prompt. Every entry is
+# prompt tokens paid on the dictation path; these cover what people mention.
+PROMPT_FILES = 150
+PROMPT_IDENTIFIERS = 120
+
+
+def context_section(context, *, category: str = "", language: str | None = None,
+                    large: bool = False) -> str:
+    """What the speaker is looking at, for the model to spell and lay out by.
+
+    This is Wispr Flow's context awareness: the names in the thread you are
+    replying to, the files of the project you have open. Only facts go in
+    here -- never permission to reword.
+    """
+    parts: list[str] = []
+    if language and language != "en":
+        label = LANGUAGE_LABELS.get(language, language)
+        parts.append(
+            f"LANGUAGE: the transcript is in {label}. Clean it in {label} with "
+            "the same rules; never translate it. The examples are English only "
+            "to illustrate the rules.")
+    if context is not None and context.names:
+        parts.append(
+            "NAMES ON SCREEN (the speaker is looking at these; spell any of them "
+            "exactly this way when the transcript contains it, or something that "
+            "sounds like it): " + ", ".join(context.names) + ".")
+    if context is not None and context.is_ide and (context.files or context.identifiers):
+        lines = ["CODE CONTEXT: the speaker is dictating into a code editor."]
+        files = context.file_names()[:PROMPT_FILES]
+        if files:
+            lines.append("Files in the open project: " + ", ".join(files) + ".")
+            lines.append(
+                "- When the speaker refers to one of these files by name, write "
+                "it as @ plus the exact file name: \"look at auth and enums\" -> "
+                "\"look at @auth.ts and @enums.ts\" when auth.ts and enums.ts are "
+                "listed. Only tag a file that is listed; an ordinary word that "
+                "is not a reference to a file stays a word.")
+        if context.identifiers:
+            lines.append("Identifiers in the project: "
+                         + ", ".join(context.identifiers[:PROMPT_IDENTIFIERS]) + ".")
+            lines.append(
+                "- When the speaker says one of these identifiers as words "
+                "(\"get user name\"), write the identifier exactly (\"getUserName\").")
+        lines.append("- Everything else is ordinary prose: capitalize and punctuate it normally.")
+        parts.append("\n".join(lines))
+    if large and category == "email":
+        parts.append(
+            "EMAIL LAYOUT: put a greeting (\"Hi Sam,\") on its own line followed "
+            "by a blank line; separate a longer message into short paragraphs "
+            "with a blank line where the topic changes; put a sign-off "
+            "(\"Thanks,\", \"Best,\") on its own line with the name after it on "
+            "the next line. Line breaks only -- the words stay exactly as edited.")
+    return "\n\n".join(parts)

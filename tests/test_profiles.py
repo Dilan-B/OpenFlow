@@ -24,8 +24,16 @@ class Matching(unittest.TestCase):
             self.assertEqual(profile_for(exe).name, "shell", exe)
 
     def test_editors_get_the_code_profile(self):
-        for exe in ("Code.exe", "idea64.exe", "sublime_text.exe"):
+        for exe in ("idea64.exe", "sublime_text.exe"):
             self.assertEqual(profile_for(exe).name, "code", exe)
+
+    def test_ai_editors_get_prose_with_straight_quotes(self):
+        # Dictation in Cursor/VS Code/Windsurf is mostly a chat prompt, which
+        # Wispr writes as prose. Quotes stay straight for pasted code.
+        for exe in ("Code.exe", "Cursor.exe", "Windsurf.exe"):
+            profile = profile_for(exe)
+            self.assertEqual(profile.name, "ide", exe)
+            self.assertTrue(profile.capitalize and profile.plain_punctuation)
 
     def test_chat_apps(self):
         self.assertEqual(profile_for("slack.exe").name, "chat")

@@ -62,8 +62,9 @@ The recording pill (96×26, antialiased, fast-attack/slow-decay bar motion)
 appears on whichever monitor your cursor is on. Both are toggleable in Settings.
 On macOS the pill floats over other apps, every Space and full-screen apps.
 
-A soft two-note chime plays when recording starts (**Start sound** in
-Settings). **Texting mode** switches every app to texting style: no capitals,
+A soft wooden pop-pop plays when recording starts, and falls when it stops —
+the same two sounds Wispr Flow makes, fitted to a recording of it
+(**Dictation sounds** in Settings). **Texting mode** switches every app to texting style: no capitals,
 no periods or commas. Question marks, "I" and names stay. Turn it on in
 Settings or from the menu bar/tray icon's menu. See
 [Texting](#smart-formatting-and-flow-styles).
@@ -131,9 +132,9 @@ python -m openflow --install-shortcuts
   dictation text*; otherwise it shows word counts and timings.
 - **Engines** — a green dot per backend, so "why is it not using the cloud" is
   answerable at a glance.
-- **Settings** — start with Windows, close-to-tray, start sound, audio ducking,
-  Texting mode, insert method, and **AI models**: paste free Groq and Gemini
-  keys to turn on the cloud models.
+- **Settings** — start with Windows, close-to-tray, dictation sounds, audio
+  ducking, Texting mode, insert method, **Languages** (tick every language you
+  speak), and **AI models**: Free or Pro, the model for each stage, and keys.
 
 ### Speed
 
@@ -164,12 +165,12 @@ Free keys unlock the best models: [Groq](https://console.groq.com/keys) runs
 Whisper large-v3 for transcription and the AI cleanup pass, and
 [Gemini](https://aistudio.google.com/apikey) is a second cleanup engine.
 
-**macOS:** paste them into **Settings → AI models**. They are stored in your
-login Keychain and take effect immediately. A Mac app opened from the Dock
-never sees variables exported in a shell profile, so this is the way to set
-keys there.
+Paste them into **Settings → AI models**. They are stored in the macOS login
+Keychain or the Windows Credential Manager and take effect immediately. (A Mac
+app opened from the Dock never sees variables exported in a shell profile, so
+this is the way to set keys there.)
 
-**Windows / environment:**
+**Or with environment variables:**
 
 ```bash
 setx GROQ_API_KEY "..."
@@ -178,6 +179,56 @@ setx GEMINI_API_KEY "..."
 
 An environment variable wins over a saved key. Keys are never written to the
 config file, and *Copy diagnostics* reports only whether each is set.
+
+### Pro: the paid models
+
+**Settings → AI models → Pro (paid)** puts the best paid models in front and
+lifts OpenFlow's free-tier limits. Everything else — context, formatting,
+snippets, Command Mode — works the same on both tiers.
+
+| Stage | Pro choices (default: best one with a key) | Key |
+|---|---|---|
+| speech-to-text | [OpenAI](https://platform.openai.com/api-keys) `gpt-transcribe` (prompt, keywords, multiple languages) · [Deepgram](https://console.deepgram.com/) `nova-3` (key terms, code-switching) · Groq Whisper | `OPENAI_API_KEY` / `DEEPGRAM_API_KEY` |
+| cleanup | [Claude](https://console.anthropic.com/settings/keys) `claude-opus-5` at low effort, with the server-side refusal fallback on · OpenAI `gpt-5.6-luna` (reasoning off) · Groq · Gemini | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+
+You pay each provider directly for what you use. The free models stay behind
+the paid ones as fallbacks, so a missing key or an outage costs a little
+quality, never the dictation. On Pro, cleanup also gets the full email layout
+instructions (paragraphs, greeting and sign-off lines). Turn on **Paid Groq
+plan** if your Groq account is on a paid tier, to lift the free-tier counters
+there too. Models are set in `config.json` (`stt.openai_model`,
+`stt.deepgram_model`, `llm.anthropic_model`, `llm.anthropic_effort`,
+`llm.openai_model`).
+
+### Context: names, files and identifiers
+
+When the hotkey goes down, OpenFlow reads what is on screen in the
+background — the way Wispr gets names right:
+
+- **Names.** Proper nouns in the focused window (UI Automation on Windows, the
+  Accessibility API on macOS): the person you are replying to, the people in
+  the thread. They bias the transcriber, and near-misses are respelled the way
+  the screen spells them ("sidney" → "Sydney"). Your own name from Settings is
+  always known. Password fields are never read, and nothing is stored.
+- **Code.** In Cursor, VS Code and Windsurf, OpenFlow finds the project the
+  window has open and indexes its files and multi-word identifiers.
+  "Look at auth and enums" becomes `look at @auth.ts and @enums.ts`, "get user
+  name" becomes `getUserName`, and "create a dashboard" stays English. Those
+  editors now get prose (capitals, question marks, straight quotes) rather than
+  the bare code style, because dictation there is mostly a chat prompt.
+
+### Long dictation, languages and whispering
+
+- **Up to 20 minutes** per dictation. Audio is cut at pauses into pieces that
+  fit each engine (under 30 s for Whisper, whose own long-form stitching drops
+  words at its seams) and transcribed in parallel: 91 s of speech came back in
+  about 1.6 s.
+- **Every language you speak.** Settings → Languages. With more than one, each
+  dictation is detected, held to your languages, and cleaned in that language —
+  never translated. Non-English text skips the English-only rules pass.
+- **Whispering.** Quiet speech is recognised by how far it rises above the
+  room's noise, not by absolute level, and normalised before transcription, so
+  a whisper close to the mic is not thrown away as silence.
 
 ### Local-only operation
 
@@ -680,6 +731,12 @@ Conflating the first two is what let the broken shortcut go unnoticed.
   say passes the check. Reordering is a far less damaging failure than
   substitution, and the length guard bounds it.
 - The overlay shows state, not live text — no partial-transcript preview.
+- There is no phone app. Wispr's iPhone keyboard has no OpenFlow counterpart;
+  this is a desktop app for Windows and macOS.
+- The Pro engines (OpenAI, Deepgram, Claude) are exercised against their live
+  APIs only up to authentication in development — their request shapes are
+  unit-tested, but the first real dictation on each is the first end-to-end
+  run. *Copy diagnostics* shows which engine answered.
 - **The golden corpus scores 100%, and that number is weaker than it looks.**
   29 cases, hand-written alongside the implementation they validate, every one
   text-in / text-out. The cleaner never sees a real ASR error in testing, and

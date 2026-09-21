@@ -90,7 +90,30 @@ LANGUAGES = [
     ("ro", "Romanian"), ("ru", "Russian"), ("sk", "Slovak"),
     ("sl", "Slovenian"), ("es", "Spanish"), ("sv", "Swedish"),
     ("uk", "Ukrainian"),
+    # Cloud engines only (Groq Whisper, OpenAI, Deepgram). The local Parakeet
+    # model covers the European languages above.
+    ("ar", "Arabic"), ("bn", "Bengali"), ("ca", "Catalan"), ("zh", "Chinese"),
+    ("gu", "Gujarati"), ("he", "Hebrew"), ("hi", "Hindi"), ("id", "Indonesian"),
+    ("ja", "Japanese"), ("ko", "Korean"), ("ms", "Malay"), ("mr", "Marathi"),
+    ("no", "Norwegian"), ("fa", "Persian"), ("pa", "Punjabi"), ("sw", "Swahili"),
+    ("tl", "Tagalog"), ("ta", "Tamil"), ("te", "Telugu"), ("th", "Thai"),
+    ("tr", "Turkish"), ("ur", "Urdu"), ("vi", "Vietnamese"),
 ]
+LANGUAGE_LABEL = dict(LANGUAGES)
+
+TRANSCRIPTION_CHOICES = (
+    ("", "Best available"),
+    ("openai", "OpenAI gpt-transcribe"),
+    ("deepgram", "Deepgram Nova-3"),
+    ("groq", "Groq Whisper large-v3"),
+)
+CLEANUP_CHOICES = (
+    ("", "Best available"),
+    ("anthropic", "Claude"),
+    ("openai", "OpenAI GPT-5.6"),
+    ("groq", "Groq"),
+    ("gemini", "Gemini"),
+)
 
 
 def _account_name() -> str:
@@ -1412,12 +1435,12 @@ class MainWindow(QMainWindow):
                      "close_to_tray", self.config.ui.close_to_tray)
         card.addWidget(_hairline())
         self._switch(card, "AI cleanup",
-                     "Sends transcripts to Gemini or Ollama for a second pass. "
-                     "Slower — the built-in pass is instant and usually matches it.",
+                     "A model fixes backtracks, names and punctuation (Groq, Gemini, "
+                     "or your Pro model). Off uses the instant built-in pass.",
                      "llm_enabled", self.config.llm.enabled)
         card.addWidget(_hairline())
-        self._switch(card, "Start sound",
-                     "A soft chime when recording starts.",
+        self._switch(card, "Dictation sounds",
+                     "A soft pop when recording starts and stops.",
                      "start_sound", self.config.audio.start_sound)
         card.addWidget(_hairline())
         self._switch(card, "Mute other apps while dictating",
@@ -1477,16 +1500,20 @@ class MainWindow(QMainWindow):
         card.addWidget(_hairline())
 
         language_row = QHBoxLayout()
-        language_row.addWidget(QLabel("Spoken language"))
-        language_row.addStretch()
-        language = QComboBox()
-        for code, label in LANGUAGES:
-            language.addItem(label, code)
-        index = language.findData(self.config.stt.language or "auto")
-        language.setCurrentIndex(index if index >= 0 else 0)
-        language.currentIndexChanged.connect(
-            lambda _i, box=language: self.cb["setting"]("stt.language", box.currentData()))
-        language_row.addWidget(language)
+        language_col = QVBoxLayout()
+        language_col.setSpacing(1)
+        language_title = QLabel("Languages")
+        language_title.setStyleSheet("background: transparent; font-weight: 600;")
+        language_col.addWidget(language_title)
+        language_sub = QLabel(self._languages_summary())
+        language_sub.setObjectName("Faint")
+        language_sub.setWordWrap(True)
+        language_col.addWidget(language_sub)
+        self._w["languages_summary"] = language_sub
+        language_row.addLayout(language_col, 1)
+        language_button = QPushButton("Choose")
+        language_button.clicked.connect(self._choose_languages)
+        language_row.addWidget(language_button)
         card.addLayout(language_row)
         card.addWidget(_hairline())
 
@@ -1562,6 +1589,78 @@ class MainWindow(QMainWindow):
         layout.addSpacing(4)
         layout.addLayout(footer)
         layout.addStretch()
+
+    def _languages_summary(self) -> str:
+        from ..config import languages
+
+        codes = languages(self.config)
+        if not codes:
+            return "Detected automatically."
+        names = [LANGUAGE_LABEL.get(code, code) for code in codes]
+        if len(names) == 1:
+            return f"{names[0]}. Add every language you speak."
+        return f"{', '.join(names)} — detected per dictation, never translated."
+
+    def _choose_languages(self) -> None:
+        """Wispr-style: "add not just one, but every language you speak"."""
+        from ..config import languages
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Languages")
+        dialog.setMinimumWidth(420)
+        outer = QVBoxLayout(dialog)
+        outer.setContentsMargins(20, 18, 20, 16)
+        outer.setSpacing(10)
+        blurb = QLabel(
+            "Tick every language you speak. OpenFlow detects which one each "
+            "dictation is in and keeps it in that language. The first one you "
+            "tick is the fallback when a clip is too short to tell.")
+        blurb.setObjectName("Sub")
+        blurb.setWordWrap(True)
+        outer.addWidget(blurb)
+
+        chosen = languages(self.config)
+        order: list[str] = list(chosen)
+        boxes: dict[str, QCheckBox] = {}
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        listed = sorted((c for c in LANGUAGES if c[0] != "auto"),
+                        key=lambda c: (c[0] != "en", c[1]))
+        for i, (code, label) in enumerate(listed):
+            box = QCheckBox(label)
+            box.setChecked(code in chosen)
+
+            def toggled(on: bool, code=code) -> None:
+                if on and code not in order:
+                    order.append(code)
+                elif not on and code in order:
+                    order.remove(code)
+
+            box.toggled.connect(toggled)
+            boxes[code] = box
+            grid.addWidget(box, i // 3, i % 3)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(holder)
+        scroll.setMinimumHeight(300)
+        outer.addWidget(scroll)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("Ghost")
+        cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel)
+        save = QPushButton("Save")
+        save.setObjectName("Primary")
+        save.clicked.connect(dialog.accept)
+        buttons.addWidget(save)
+        outer.addLayout(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.cb["setting"]("stt.languages", list(order))
+        self._w["languages_summary"].setText(self._languages_summary())
 
     def _build_microphone_card(self, layout) -> None:
         """Device picker plus a live meter. Without the meter a wrong choice is
@@ -1678,24 +1777,90 @@ class MainWindow(QMainWindow):
         from .. import keys
 
         card = self._card(layout, margins=(20, 14, 20, 14))
+        head_row = QHBoxLayout()
         head = QLabel("AI models")
         head.setObjectName("H2")
-        card.addWidget(head)
+        head_row.addWidget(head)
+        head_row.addStretch()
+        tier_wrap = QFrame()
+        tier_wrap.setObjectName("SegWrap")
+        tier_layout = QHBoxLayout(tier_wrap)
+        tier_layout.setContentsMargins(3, 3, 3, 3)
+        tier_layout.setSpacing(0)
+        self._tier_group = QButtonGroup(self)
+        for value, label in (("free", "Free"), ("pro", "Pro (paid)")):
+            seg = QPushButton(label)
+            seg.setObjectName("Seg")
+            seg.setCheckable(True)
+            seg.setChecked(self.config.models.tier == value)
+            seg.clicked.connect(lambda _=False, v=value: self._set_tier(v))
+            self._tier_group.addButton(seg)
+            tier_layout.addWidget(seg)
+        head_row.addWidget(tier_wrap)
+        card.addLayout(head_row)
+
         note = QLabel(
-            "Free API keys unlock the best models: Groq runs Whisper large-v3 "
-            "for transcription and the AI cleanup pass; Gemini is a second "
-            f"cleanup engine. Keys are kept in your {keys.store_name()}, never "
-            "in the config file." if keys.supported() else
-            "Set GROQ_API_KEY and GEMINI_API_KEY in your environment to use "
-            "Groq's Whisper large-v3 and AI cleanup.")
+            "Free: Groq runs Whisper large-v3 and the AI cleanup pass, Gemini is "
+            "a second cleanup engine, and local models take over offline. "
+            "Pro: the best paid models, OpenAI gpt-transcribe or Deepgram "
+            "Nova-3 to transcribe and Claude or GPT-5.6 to clean up, with no "
+            "free-tier limits. You pay the provider directly for what you use. "
+            f"Keys are kept in your {keys.store_name()}, never in the config file."
+            if keys.supported() else
+            "Set GROQ_API_KEY and GEMINI_API_KEY (or, for Pro, OPENAI_API_KEY, "
+            "ANTHROPIC_API_KEY and DEEPGRAM_API_KEY) in your environment.")
         note.setObjectName("Faint")
         note.setWordWrap(True)
         card.addWidget(note)
+
+        pro = QWidget()
+        pro_layout = QVBoxLayout(pro)
+        pro_layout.setContentsMargins(0, 0, 0, 0)
+        for key, title, choices, current in (
+                ("models.transcription", "Transcription", TRANSCRIPTION_CHOICES,
+                 self.config.models.transcription),
+                ("models.cleanup", "Cleanup", CLEANUP_CHOICES, self.config.models.cleanup)):
+            pro_layout.addWidget(_hairline())
+            row = QHBoxLayout()
+            row.addWidget(QLabel(title))
+            row.addStretch()
+            box = QComboBox()
+            for value, label in choices:
+                box.addItem(label, value)
+            index = box.findData(current)
+            box.setCurrentIndex(index if index >= 0 else 0)
+            if key == "models.transcription":
+                box.currentIndexChanged.connect(
+                    lambda _i, b=box: self.cb["setting"]("models.transcription", b.currentData()))
+            else:
+                box.currentIndexChanged.connect(
+                    lambda _i, b=box: self.cb["setting"]("models.cleanup", b.currentData()))
+            row.addWidget(box)
+            pro_layout.addLayout(row)
+        pro_layout.addWidget(_hairline())
+        self._switch(pro_layout, "Paid Groq plan",
+                     "Lifts OpenFlow's free-tier daily limits on Groq.",
+                     "models.groq_paid", self.config.models.groq_paid)
+        pro.setVisible(self.config.models.tier == "pro")
+        self._w["pro_models"] = pro
+        card.addWidget(pro)
         if not keys.supported():
             return
 
+        paid_rows: list[QWidget] = []
         for name, (label, url) in keys.KNOWN.items():
-            card.addWidget(_hairline())
+            paid = name not in keys.FREE
+            if paid:
+                label = f"{label} (Pro)"
+            row_holder = QWidget()
+            holder_layout = QVBoxLayout(row_holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.addWidget(_hairline())
+            if paid:
+                paid_rows.append(row_holder)
+                row_holder.setVisible(self.config.models.tier == "pro")
+            card.addWidget(row_holder)
+            card_row = holder_layout
             row = QHBoxLayout()
             col = QVBoxLayout()
             col.setSpacing(1)
@@ -1716,10 +1881,10 @@ class MainWindow(QMainWindow):
             row.addWidget(save)
             remove = QPushButton("Remove")
             row.addWidget(remove)
-            get = QPushButton("Get a free key")
+            get = QPushButton("Get a key" if paid else "Get a free key")
             get.clicked.connect(lambda _=False, u=url: self._open_url(u))
             row.addWidget(get)
-            card.addLayout(row)
+            card_row.addLayout(row)
 
             widgets = (status, field, remove)
             save.clicked.connect(
@@ -1729,6 +1894,14 @@ class MainWindow(QMainWindow):
             remove.clicked.connect(
                 lambda _=False, n=name, w=widgets: self._remove_key(n, w))
             self._sync_key(name, widgets)
+        self._w["paid_key_rows"] = paid_rows
+
+    def _set_tier(self, tier: str) -> None:
+        self.cb["setting"]("models.tier", tier)
+        pro = tier == "pro"
+        self._w["pro_models"].setVisible(pro)
+        for row in self._w.get("paid_key_rows", []):
+            row.setVisible(pro)
 
     def _sync_key(self, name: str, widgets, message: str = "") -> None:
         from .. import keys

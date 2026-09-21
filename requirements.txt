@@ -20,6 +20,9 @@ moonshine-voice>=0.1.0
 # above are unavailable -- install if you want the belt-and-braces chain.
 # faster-whisper>=1.0.3
 
-# Note: the LLM layer (Ollama / Gemini) and the Groq STT client speak plain
-# HTTP through urllib -- no SDKs, nothing to install, nothing to import at
-# startup. The text-cleanup package and its test harness are pure stdlib.
+# Claude, for Pro cleanup. Imported only when a Claude cleanup runs.
+anthropic>=1.7.0
+
+# Note: every other cloud client (Groq, Gemini, OpenAI, Deepgram, Ollama)
+# speaks plain HTTP through urllib -- no SDKs, nothing to import at startup.
+# The text-cleanup package and its test harness are pure stdlib.

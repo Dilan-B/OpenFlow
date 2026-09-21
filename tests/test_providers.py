@@ -31,7 +31,7 @@ class _Stub(GeminiProvider):
         self.model = model
         self._outcome = outcome
 
-    def complete(self, system, user, *, strict=True):
+    def complete(self, system, user, *, strict=True, allowed=frozenset()):
         if isinstance(self._outcome, Exception):
             raise self._outcome
         return self._outcome

@@ -35,7 +35,8 @@ class Provider(Protocol):
 
     def available(self) -> bool: ...
 
-    def complete(self, system: str, user: str, *, strict: bool = True) -> str: ...
+    def complete(self, system: str, user: str, *, strict: bool = True,
+                 allowed: frozenset[str] = frozenset()) -> str: ...
 
 
 def _tokens(text: str) -> list[str]:
@@ -51,7 +52,8 @@ def _expand(word: str) -> set[str]:
     return forms
 
 
-def check_containment(output: str, original: str) -> list[str]:
+def check_containment(output: str, original: str,
+                      allowed: frozenset[str] | set[str] = frozenset()) -> list[str]:
     """Return output words that do not appear in the input.
 
     ASR post-correction models that rewrite rather than edit will substitute
@@ -64,7 +66,7 @@ def check_containment(output: str, original: str) -> list[str]:
     are exempt, since instruction 3 (fix formatting) legitimately produces
     them.
     """
-    source: set[str] = set()
+    source: set[str] = set(allowed)
     for word in _tokens(original):
         source |= _expand(word)
 
@@ -78,7 +80,8 @@ def check_containment(output: str, original: str) -> list[str]:
     return unseen
 
 
-def sanitize(output: str, *, original: str, strict: bool = True) -> str:
+def sanitize(output: str, *, original: str, strict: bool = True,
+             allowed: frozenset[str] | set[str] = frozenset()) -> str:
     """Enforce PRD instruction 4 defensively.
 
     Models -- especially small local ones -- leak preambles and quote wrapping
@@ -86,6 +89,11 @@ def sanitize(output: str, *, original: str, strict: bool = True) -> str:
     two structural checks that no prompt can be talked out of: the output may
     not grow, and it may not contain words the speaker never said. Transforms
     (deliberate rewrites) run with ``strict=False``.
+
+    ``allowed`` holds words the model may write although the speaker did not
+    say them in that form: names spelled the way the screen spells them, the
+    files and identifiers of the open project. Everything else still has to
+    come from the transcript.
     """
     text = normalize_whitespace(output)
     text = _PREAMBLE_RE.sub("", text)
@@ -101,10 +109,13 @@ def sanitize(output: str, *, original: str, strict: bool = True) -> str:
     # Cleanup only ever removes words. A 30% grow-margin absorbs added
     # punctuation and expanded contractions without letting a hallucinated
     # paragraph through.
-    if len(text) > max(40, int(len(original.strip()) * 1.3)):
+    # File tags and identifiers ("@auth.ts", "getUserName") are longer than
+    # the words they replace, so the margin grows with what was allowed in.
+    grow = 1.3 if not allowed else 1.5
+    if len(text) > max(40, int(len(original.strip()) * grow)):
         raise ProviderError("completion longer than input; model rewrote instead of edited")
 
-    invented = check_containment(text, original)
+    invented = check_containment(text, original, allowed)
     if invented:
         raise ProviderError(
             f"completion introduced words the speaker did not say: {invented[:5]}"

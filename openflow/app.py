@@ -25,7 +25,10 @@ from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
 from .capture import Capture
 from .commands import EDIT_PROMPT, parse as parse_command
-from .config import Config
+from .config import Config, llm_chain, stt_chain
+from .context import (
+    EMPTY as EMPTY_CONTEXT, ContextReader, repair_names, tag_files, with_own_name,
+)
 from .corrections import shared as corrections
 from .exits import EXIT_NO_HOTKEY, EXIT_NO_MICROPHONE, EXIT_OK
 from .formatting import classify, smart_format
@@ -83,6 +86,9 @@ class OpenFlowApp:
         # Reads the text around the caret in the target app, started with the
         # recording and collected after transcription. See input/caret.py.
         self._caret: CaretReader | None = None
+        # What is on screen (names, the open project), gathered while the
+        # user speaks. See context.py.
+        self._context: ContextReader | None = None
         # Command Mode: the caret read taken when its hotkey went down, which
         # is the only moment the user's selection is still the focused one.
         self._command_caret: CaretReader | None = None
@@ -480,11 +486,31 @@ class OpenFlowApp:
             self.config.capture.audio = bool(value)
             self.config.save()
             return
-        if key == "stt.language":
-            # "auto" is stored as an empty string: the engines treat a missing
-            # language as "detect", and this keeps one meaning per value.
-            self.config.stt.language = "" if value == "auto" else str(value)
+        if key == "models.tier":
+            if value not in ("free", "pro"):
+                log.warning("ignoring models.tier=%r", value)
+                return
+            self.config.models.tier = value
+            self._models_changed()
+            return
+        if key == "models.transcription":
+            self.config.models.transcription = str(value or "")
+            self._models_changed()
+            return
+        if key == "models.cleanup":
+            self.config.models.cleanup = str(value or "")
+            self._models_changed()
+            return
+        if key == "models.groq_paid":
+            self.config.models.groq_paid = bool(value)
+            self._models_changed()
+            return
+        if key == "stt.languages":
+            codes = [str(c) for c in (value or []) if c and c != "auto"]
+            self.config.stt.languages = codes
+            self.config.stt.language = codes[0] if codes else ""
             self.config.save()
+            log.info("languages: %s", ", ".join(codes) or "detect")
             self._events.put(("engines", None))
             return
         if key == "close_to_tray":
@@ -505,6 +531,13 @@ class OpenFlowApp:
             log.warning("no handler for setting %r; ignoring", key)
             return
         self.config.save()
+
+    def _models_changed(self) -> None:
+        self.config.save()
+        log.info("models: tier=%s transcription=%s cleanup=%s groq_paid=%s",
+                 self.config.models.tier, self.config.models.transcription or "auto",
+                 self.config.models.cleanup or "auto", self.config.models.groq_paid)
+        self._events.put(("engines", None))
 
     def _set_input_device(self, value) -> None:
         """Swap microphones live. The UI hands back None for System default."""
@@ -554,7 +587,7 @@ class OpenFlowApp:
         from .llm.providers import build_provider
 
         prompt = TRANSFORM_PROMPTS.get(kind, TRANSFORM_PROMPTS["formal"])
-        for name in self.config.llm.backends:
+        for name in llm_chain(self.config):
             if name == "rules":
                 continue
             try:
@@ -577,14 +610,14 @@ class OpenFlowApp:
 
     def _refresh_engines(self) -> None:
         rows: list[tuple[str, str, bool, str]] = []
-        for name in self.config.stt.backends:
+        for name in stt_chain(self.config):
             try:
                 engine = build_engine(name, self.config)
             except ValueError:
                 continue
             rows.append(("SPEECH", name, engine.available(),
                          "local" if engine.is_local else "cloud"))
-        for name in self.config.llm.backends:
+        for name in llm_chain(self.config):
             if name == "rules":
                 rows.append(("CLEANUP", "rules", True, "built in"))
                 continue
@@ -605,6 +638,8 @@ class OpenFlowApp:
         self._target_app, self._target_title = foreground_window()
         fmt = self.config.formatting
         self._caret = CaretReader().start() if fmt.smart and fmt.context_aware else None
+        self._context = (ContextReader(self._target_app, self._target_title).start()
+                         if fmt.context_aware else None)
         if self.config.audio.start_sound:
             chime.play()
         self.recorder.start()
@@ -614,11 +649,16 @@ class OpenFlowApp:
 
     def _on_hotkey_stop(self) -> None:
         audio = self.recorder.stop()
+        # Handed to the worker with the audio: by the time it runs, the next
+        # hotkey press may already have started a new reader.
+        context, self._context = self._context, None
+        if self.config.audio.start_sound:
+            chime.play_stop()
         # Restore audio the moment the key is released -- the user's music
         # should come back while transcription is still running.
         self.ducker.restore()
         self._events.put(("state", "transcribing"))
-        self._jobs.put(audio)
+        self._jobs.put(("dictation", (audio, context)))
 
     # -- command mode ------------------------------------------------------
     def _on_command_start(self) -> None:
@@ -628,6 +668,7 @@ class OpenFlowApp:
         # Always read the caret here, whatever the formatting setting says:
         # Command Mode is *about* the selection, not about spacing.
         self._command_caret = CaretReader().start()
+        self._context = ContextReader(self._target_app, self._target_title).start()
         if self.config.audio.start_sound:
             chime.play()
         self.recorder.start()
@@ -637,11 +678,15 @@ class OpenFlowApp:
 
     def _on_command_stop(self) -> None:
         audio = self.recorder.stop()
+        context, self._context = self._context, None
+        if self.config.audio.start_sound:
+            chime.play_stop()
         self.ducker.restore()
         self._events.put(("state", "transcribing"))
-        self._jobs.put(("command", audio))
+        self._jobs.put(("command", (audio, context)))
 
     def _on_hotkey_cancel(self) -> None:
+        self._context = None
         self.recorder.cancel()
         self.ducker.restore()
         self._events.put(("hide", None))
@@ -752,17 +797,18 @@ class OpenFlowApp:
                 job = self._jobs.get(timeout=0.25)
             except queue.Empty:
                 continue
-            kind, audio = job if isinstance(job, tuple) else ("dictation", job)
+            kind, payload = job if isinstance(job, tuple) else ("dictation", job)
+            audio, reader = payload if isinstance(payload, tuple) else (payload, None)
             try:
                 if kind == "command":
-                    self._process_command(audio)
+                    self._process_command(audio, reader)
                 else:
-                    self._process(audio)
+                    self._process(audio, reader)
             except Exception:
                 log.exception("%s failed", kind)
                 self._flash_error("Failed")
 
-    def _process(self, audio) -> None:
+    def _process(self, audio, reader: ContextReader | None = None) -> None:
         rate = self.config.audio.sample_rate
         if audio is None or len(audio) < rate * MIN_AUDIO_S:
             self._events.put(("hide", None))
@@ -782,8 +828,14 @@ class OpenFlowApp:
             self._events.put(("hide", None))
             return
         audio = condition(audio, rate)
+        scratch = self.window.scratch_mode
+        context = EMPTY_CONTEXT if scratch or reader is None else reader.result()
+        context = with_own_name(context, self.config.ui.display_name)
+        if context.names or context.files:
+            log.info("context: %d names on screen, %d project files, %d identifiers",
+                     len(context.names), len(context.files), len(context.identifiers))
         try:
-            transcript = self.stt.transcribe(audio, rate)
+            transcript = self.stt.transcribe(audio, rate, context=context)
         except SttError as exc:
             log.error("transcription failed: %s", exc)
             self._flash_error("No transcription")
@@ -802,20 +854,25 @@ class OpenFlowApp:
             self._events.put(("hide", None))
             return
 
-        result = self.cleaner.clean(transcript.text)
+        fmt = self.config.formatting
+        kind = classify("" if scratch else self._target_app,
+                        "" if scratch else self._target_title, fmt.apps)
+        result = self.cleaner.clean(transcript.text, context=context,
+                                    category=kind.category, language=transcript.language)
         final = self.personal.apply(result.text)
+        # Names as the screen spells them: "sidney" -> "Sydney" when Sydney is
+        # in the thread being replied to.
+        final = repair_names(final, context.names)
         # Replay what the user has already taught us. Last, so a correction
         # always wins: it is the one edit we know this speaker made by hand.
         final = self.corrections.apply(final)
+        if context.is_ide and context.files:
+            final = tag_files(final, context.file_names())
 
         # Lay the words out for where they land: lists, digits, the app
         # category's Flow Style, and the text already around the caret.
-        fmt = self.config.formatting
-        scratch = self.window.scratch_mode
         profile = (profile_for(self._target_app, self.config.profiles.apps)
                    if self.config.profiles.enabled and not scratch else DEFAULT)
-        kind = classify("" if scratch else self._target_app,
-                        "" if scratch else self._target_title, fmt.apps)
         style = fmt.styles.get(kind.category, "formal")
         caret = None if scratch or self._caret is None else self._caret.result()
         shaped = smart_format(
@@ -876,7 +933,7 @@ class OpenFlowApp:
             result.engine, result.latency_ms, len(result.retractions),
         )
 
-    def _process_command(self, audio) -> None:
+    def _process_command(self, audio, reader: ContextReader | None = None) -> None:
         """Run a spoken Command Mode instruction.
 
         Deliberately narrow: an edit rewrites the selection, a search opens a
@@ -889,8 +946,9 @@ class OpenFlowApp:
             return
 
         audio = condition(audio, rate)
+        context = reader.result() if reader is not None else EMPTY_CONTEXT
         try:
-            transcript = self.stt.transcribe(audio, rate)
+            transcript = self.stt.transcribe(audio, rate, context=context)
         except SttError as exc:
             log.error("command transcription failed: %s", exc)
             self._flash_error("No transcription")
@@ -938,7 +996,7 @@ class OpenFlowApp:
 
         self._events.put(("state", "transcribing"))
         user = f"INSTRUCTION: {instruction}\n\nTEXT:\n{selection}"
-        for name in self.config.llm.backends:
+        for name in llm_chain(self.config):
             if name == "rules":
                 continue
             try:
