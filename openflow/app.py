@@ -391,12 +391,12 @@ class OpenFlowApp:
                 log.info("removed saved %s", name)
             else:
                 keys.save(name, value)
-                log.info("saved %s to the keychain", name)
+                log.info("saved %s to the %s", name, keys.store_name())
         except ValueError as exc:
             return False, str(exc).capitalize()
         except Exception as exc:
             log.warning("could not save %s: %s", name, exc)
-            return False, "Could not save to the Keychain"
+            return False, f"Could not save to the {keys.store_name()}"
         self._events.put(("engines", None))
         return True, ""
 
