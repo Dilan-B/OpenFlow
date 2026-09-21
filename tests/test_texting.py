@@ -92,7 +92,7 @@ class SavedKeys(unittest.TestCase):
             self.assertEqual(api_key("GROQ_API_KEY"), "from-keychain")
 
     def test_rejects_malformed_keys_before_touching_the_keychain(self):
-        with mock.patch.object(keys, "supported", return_value=True), \
+        with mock.patch.object(keys, "_backend", return_value="mac"), \
                 mock.patch("subprocess.run") as run:
             for bad in ("", "short", 'has"quote-in-it', "has space in it x"):
                 with self.assertRaises(ValueError):
@@ -103,7 +103,7 @@ class SavedKeys(unittest.TestCase):
 
     def test_key_goes_through_stdin_not_argv(self):
         done = mock.Mock(returncode=0, stderr="", stdout="")
-        with mock.patch.object(keys, "supported", return_value=True), \
+        with mock.patch.object(keys, "_backend", return_value="mac"), \
                 mock.patch("subprocess.run", return_value=done) as run:
             keys.save("GROQ_API_KEY", "gsk_abcdefghijklmnop")
             args, kwargs = run.call_args
@@ -116,10 +116,22 @@ class SavedKeys(unittest.TestCase):
             run.assert_not_called()
 
     def test_unsupported_platform_reads_nothing(self):
-        with mock.patch.object(keys, "supported", return_value=False), \
+        with mock.patch.object(keys, "_backend", return_value=None), \
                 mock.patch("subprocess.run") as run:
             self.assertIsNone(keys.load("GROQ_API_KEY"))
             run.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Credential Manager is Windows-only")
+    def test_windows_credential_manager_round_trip(self):
+        target = keys._win_target("GROQ_API_KEY") + "-test"
+        with mock.patch.object(keys, "_win_target", return_value=target):
+            try:
+                keys._win_write("GROQ_API_KEY", "gsk_windows_round_trip")
+                self.assertEqual(keys._win_read("GROQ_API_KEY"), "gsk_windows_round_trip")
+                keys._win_delete("GROQ_API_KEY")
+                self.assertEqual(keys._win_read("GROQ_API_KEY"), "")
+            finally:
+                keys._win_delete("GROQ_API_KEY")
 
     def test_groq_whisper_sees_a_key_saved_after_startup(self):
         from openflow.stt.engines import build_engine

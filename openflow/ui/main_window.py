@@ -1684,8 +1684,8 @@ class MainWindow(QMainWindow):
         note = QLabel(
             "Free API keys unlock the best models: Groq runs Whisper large-v3 "
             "for transcription and the AI cleanup pass; Gemini is a second "
-            "cleanup engine. Keys are kept in your Keychain, never in the "
-            "config file." if keys.supported() else
+            f"cleanup engine. Keys are kept in your {keys.store_name()}, never "
+            "in the config file." if keys.supported() else
             "Set GROQ_API_KEY and GEMINI_API_KEY in your environment to use "
             "Groq's Whisper large-v3 and AI cleanup.")
         note.setObjectName("Faint")
@@ -1740,7 +1740,7 @@ class MainWindow(QMainWindow):
         elif os.environ.get(name):
             text = "Set in the environment"
         elif saved:
-            text = "Saved in Keychain"
+            text = f"Saved in {keys.store_name()}"
         else:
             text = "Not set"
         status.setText(text)
