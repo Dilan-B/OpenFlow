@@ -10,15 +10,23 @@ removes most of the opportunity. This is the backstop for what gets through:
 a clip that was short or quiet, whose entire transcript is one of these
 stock phrases, is discarded rather than pasted into somebody's document.
 
+Parakeet has its own habit: room noise alone comes back as "Yeah." or
+"Mm-hmm.", from clips long and loud enough to pass both of the tells above. The
+third tell catches those -- nothing in the clip stayed clear of its own noise
+floor for as long as a spoken word does (audio/conditioning.voiced_seconds);
+the hotkey's own clicks are too brief to count.
+
 The gate is deliberately narrow. A real "thank you" is a thing people dictate,
 so the phrase alone is never enough -- the transcript has to be *nothing but*
-the phrase, and the audio has to have been too short or too quiet to plausibly
-contain it.
+the phrase, and the audio has to have been too short, too quiet or too flat to
+plausibly contain it.
 """
 
 from __future__ import annotations
 
 import re
+
+from ..audio.conditioning import MIN_VOICED_S
 
 # Matched against the whole transcript, lowercased and stripped of punctuation.
 STOCK_PHRASES: frozenset[str] = frozenset({
@@ -37,6 +45,10 @@ STOCK_PHRASES: frozenset[str] = frozenset({
     "the",
     "so",
     "okay",
+    "yeah",
+    "mhm",
+    "mm hmm",
+    "uh huh",
     "ok",
     "oh",
     "hmm",
@@ -70,15 +82,19 @@ def normalize(text: str) -> str:
     return _WS_RE.sub(" ", folded).strip()
 
 
-def is_silence_hallucination(text: str, duration_s: float, rms: float) -> bool:
+def is_silence_hallucination(text: str, duration_s: float, rms: float,
+                             voiced_s: float | None = None) -> bool:
     """True when ``text`` looks invented rather than heard.
 
-    Requires all three: the transcript is nothing but a stock phrase, and the
-    clip was either too short or too quiet to have contained it.
+    Requires the transcript to be nothing but a stock phrase, and the clip to
+    have been too short, too quiet, or -- when ``voiced_s`` is given -- too
+    short of anything word-like to have contained it.
     """
     normalized = normalize(text)
     if not normalized:
         return False
     if normalized not in STOCK_PHRASES:
         return False
+    if voiced_s is not None and voiced_s < MIN_VOICED_S:
+        return True
     return duration_s <= SUSPECT_DURATION_S or rms <= SUSPECT_RMS

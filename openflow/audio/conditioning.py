@@ -53,12 +53,15 @@ SILENCE_PEAK = 0.02      # speech transients clear this comfortably
 # of the clip against its quietest ones.
 SPEECH_CONTRAST = 4.0    # ~12 dB between the speech body and the noise floor
 MIN_REFERENCE = 0.0002   # below this there is nothing to amplify but hiss
+# A word holds above the noise floor at least this long; a key click does not.
+MIN_VOICED_S = 0.12
+FRAME_S = 0.02
 
 
 def _frame_levels(samples, sample_rate: int):
     import numpy as np
 
-    window = max(1, int(sample_rate * 0.02))
+    window = max(1, int(sample_rate * FRAME_S))
     usable = (len(samples) // window) * window
     if usable < window * 5:
         return None
@@ -76,6 +79,27 @@ def contrast(audio, sample_rate: int) -> float:
     floor = float(np.percentile(levels, 10))
     body = float(np.percentile(levels, 95))
     return body / max(floor, 1e-7)
+
+
+def voiced_seconds(audio, sample_rate: int) -> float:
+    """The longest unbroken stretch the clip spends clearly above its own
+    noise floor.
+
+    Any spoken word holds there for a couple of hundred milliseconds; the
+    click of the hotkey going down or up is over within a few frames. So a
+    clip whose only loud moments are clicks scores near zero, however sharp
+    the clicks are -- which ``contrast`` alone cannot tell apart."""
+    import numpy as np
+
+    levels = _frame_levels(audio, sample_rate)
+    if levels is None:
+        return 0.0
+    floor = max(float(np.percentile(levels, 10)), 1e-7)
+    longest = run = 0
+    for loud in levels >= floor * SPEECH_CONTRAST:
+        run = run + 1 if loud else 0
+        longest = max(longest, run)
+    return longest * FRAME_S
 
 
 def condition(audio, sample_rate: int):

@@ -166,7 +166,7 @@ class SttRouter:
 
     @staticmethod
     def _run(engine, chunks, sample_rate: int, context) -> str:
-        from ..audio.conditioning import measure
+        from ..audio.conditioning import measure, voiced_seconds
 
         def one(chunk) -> str:
             try:
@@ -179,7 +179,8 @@ class SttRouter:
                 # boilerplate ("Thank you."); inside a long dictation that is
                 # an invented sentence, not a stray tap to discard.
                 rms, _peak = measure(chunk)
-                if is_silence_hallucination(text, len(chunk) / sample_rate, rms):
+                if is_silence_hallucination(text, len(chunk) / sample_rate, rms,
+                                            voiced_seconds(chunk, sample_rate)):
                     return ""
             return text
 
