@@ -26,15 +26,10 @@ blocks it until you approve it once.
 
 Hold **Control + Cmd** to dictate.
 
-**After installing a new version:** the app is not signed with an Apple
-Developer ID, so macOS treats each version as a new app and the old grants stop
-applying. They can even stay switched on in System Settings while doing
-nothing. If the shortcut only works inside OpenFlow, clear the stale entries,
-then reopen OpenFlow and answer the prompts again:
-
-```bash
-tccutil reset Accessibility io.github.dilan-b.openflow && tccutil reset ListenEvent io.github.dilan-b.openflow
-```
+**After installing a new version:** permissions carry over from 1.7.1 on --
+every Mac build is signed with the same OpenFlow certificate, so macOS knows
+it is the same app. Coming from 1.7.0 or earlier, macOS asks one more time;
+OpenFlow clears the old entries itself first, so just switch the new ones on.
 
 System-wide voice-to-text for Windows/macOS/Linux. Hold a hotkey, talk, release
 — cleaned-up text lands in whatever app had your cursor. Implements
@@ -718,9 +713,9 @@ Conflating the first two is what let the broken shortcut go unnoticed.
   chord your apps don't already use. Ctrl+Win is chosen because it's inert on
   Windows: holding Ctrl suppresses the Start menu a bare Win keyup would open.
 - The macOS build is packaged and smoke-tested in CI, and dictation has been
-  used on a real Mac (macOS 27, Apple Silicon). It is ad-hoc signed, so every
-  update needs Microphone, Accessibility and Input Monitoring granted again
-  (see [First launch on macOS](#first-launch-on-macos)). Muting other apps while dictating is Windows-only, the
+  used on a real Mac (macOS 27, Apple Silicon). It is signed with the project's
+  own certificate rather than an Apple Developer ID, so Gatekeeper still asks
+  once per version (see [First launch on macOS](#first-launch-on-macos)). Muting other apps while dictating is Windows-only, the
   sidebar icons use a Windows font (Segoe Fluent), and "Start with Windows"
   does nothing on a Mac. From a source checkout, Accessibility and Microphone
   permissions go to the terminal running Python instead of the app.

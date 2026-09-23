@@ -20,12 +20,13 @@ import threading
 import time
 
 from .audio import chime
-from .audio.conditioning import condition, is_silent, measure
+from .audio.conditioning import condition, is_silent, measure, voiced_seconds
 from .audio.ducker import AudioDucker
 from .audio.recorder import AudioUnavailable, Recorder
 from .capture import Capture
 from .commands import EDIT_PROMPT, parse as parse_command
-from .config import Config, llm_chain, stt_chain
+from . import __version__
+from .config import CONFIG_DIR, Config, llm_chain, stt_chain
 from .context import (
     EMPTY as EMPTY_CONTEXT, ContextReader, repair_names, tag_files, with_own_name,
 )
@@ -195,6 +196,8 @@ class OpenFlowApp:
         # macOS will not list the app to switch on until it has asked.
         if not macos_permissions.trusted():
             self._awaiting_permissions = True
+            macos_permissions.clear_stale(
+                __version__, CONFIG_DIR / "macos_permissions.json")
             macos_permissions.request()
 
         self.tray.start()
@@ -820,6 +823,7 @@ class OpenFlowApp:
         # after which every clip looks equally loud and the level tells you
         # nothing about whether anyone actually spoke.
         rms_before, peak_before = measure(audio)
+        voiced_before = voiced_seconds(audio, rate)
         if is_silent(audio, rate):
             # A stray tap of the hotkey, or a dead microphone. Log the levels:
             # if this ever fires on real speech, the numbers say so immediately.
@@ -848,9 +852,11 @@ class OpenFlowApp:
         # Whisper-family models answer silence with subtitle boilerplate --
         # "Thank you.", "Thanks for watching!". Pasting that into someone's
         # document is worse than pasting nothing.
-        if is_silence_hallucination(transcript.text, duration_s, rms_before):
-            log.info("discarding likely silence hallucination %r (%.1fs, rms=%.4f)",
-                     transcript.text.strip(), duration_s, rms_before)
+        if is_silence_hallucination(transcript.text, duration_s, rms_before,
+                                    voiced_before):
+            log.info("discarding likely silence hallucination %r "
+                     "(%.1fs, rms=%.4f, voiced=%.2fs)", transcript.text.strip(),
+                     duration_s, rms_before, voiced_before)
             self._events.put(("hide", None))
             return
 

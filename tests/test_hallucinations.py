@@ -68,6 +68,43 @@ class Keeps(unittest.TestCase):
             "Bye.", SUSPECT_DURATION_S + 0.01, LOUD))
 
 
+class ParakeetRoomNoise(unittest.TestCase):
+    """Parakeet answers an empty push-to-talk with "Yeah." -- from a clip long
+    and loud enough to pass the duration and level tells. What gives it away
+    is that nothing in it held above the noise floor like a word does."""
+
+    def _clip(self, *, word=False, clicks=False):
+        import numpy as np
+
+        rate, rng = 16000, np.random.default_rng(0)
+        audio = (rng.standard_normal(2 * rate) * 0.01).astype(np.float32)
+        if clicks:      # the hotkey going down and coming back up
+            audio[800:1300] += rng.standard_normal(500) * 0.3
+            audio[-1500:-1000] += rng.standard_normal(500) * 0.3
+        if word:        # ~300 ms of voicing
+            t = np.arange(int(0.3 * rate)) / rate
+            audio[12000:12000 + len(t)] += (
+                0.15 * np.sin(2 * np.pi * 180 * t) * np.hanning(len(t)))
+        return audio, rate
+
+    def _voiced(self, **kw):
+        from openflow.audio.conditioning import voiced_seconds
+
+        return voiced_seconds(*self._clip(**kw))
+
+    def test_yeah_from_room_noise_and_clicks_is_discarded(self):
+        for text in ("Yeah.", "Mm-hmm.", "Uh-huh."):
+            self.assertTrue(is_silence_hallucination(
+                text, LONG, LOUD, self._voiced(clicks=True)), text)
+
+    def test_a_spoken_yeah_is_kept(self):
+        self.assertFalse(is_silence_hallucination(
+            "Yeah.", LONG, LOUD, self._voiced(word=True, clicks=True)))
+
+    def test_flat_audio_never_discards_real_words(self):
+        self.assertFalse(is_silence_hallucination("Ship it.", LONG, LOUD, 0.0))
+
+
 class Normalization(unittest.TestCase):
     def test_folds_case_punctuation_and_whitespace(self):
         self.assertEqual(normalize("  Thank   YOU!!  "), "thank you")
