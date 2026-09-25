@@ -36,6 +36,28 @@ def _ensure_stdio() -> bool:
     return windowed
 
 
+def _ensure_ca_bundle() -> None:
+    """Give a frozen Mac build certificates to verify HTTPS with.
+
+    The bundled Python's OpenSSL looks for CA certificates at the path it was
+    compiled with, which does not exist on the user's Mac. Every request to
+    Groq, Gemini and the update check then failed certificate verification,
+    and cleanup quietly fell back to the rules pass. certifi's bundle ships
+    inside the app; point OpenSSL at it. Windows reads the system store and
+    needs none of this.
+    """
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return
+    if os.environ.get("SSL_CERT_FILE"):
+        return
+    try:
+        import certifi
+
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except ImportError:
+        pass
+
+
 def _configure_logging(verbose: bool, windowed: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     fmt = logging.Formatter(
@@ -206,7 +228,18 @@ def _self_test(parser: argparse.ArgumentParser) -> int:
         except Exception as exc:
             check(f"import {module}", False, str(exc))
 
-    # 4. Caret context generates a UI Automation wrapper at runtime with
+    # 4. HTTPS. A bundle whose OpenSSL finds no CA certificates fails every
+    #    cloud request with CERTIFICATE_VERIFY_FAILED, and cleanup silently
+    #    degrades to the rules pass -- nothing looks broken but the output.
+    try:
+        import ssl
+
+        cas = ssl.create_default_context().cert_store_stats().get("x509_ca", 0)
+        check("CA certificates load", cas > 0, f"{cas} certificates")
+    except Exception as exc:
+        check("CA certificates load", False, str(exc))
+
+    # 5. Caret context generates a UI Automation wrapper at runtime with
     #    comtypes' code generator -- exactly the kind of lazily imported
     #    module a bundler misses. Without it formatting silently loses its
     #    context, so fail the build instead.
@@ -230,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     # Before argparse: a usage error in a windowed build writes to sys.stderr,
     # and if that is None the app dies with no window and no message.
     windowed = _ensure_stdio()
+    _ensure_ca_bundle()
 
     parser = argparse.ArgumentParser(prog="openflow", description="System-wide voice-to-text.")
     parser.add_argument("--check", action="store_true", help="report backend readiness and exit")
@@ -251,7 +285,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
-    _configure_logging(args.verbose, windowed)
+    # A Mac app launched from Finder has stdio, but it goes nowhere anyone
+    # looks; keep the log file there too.
+    _configure_logging(args.verbose,
+                       windowed or (sys.platform == "darwin" and getattr(sys, "frozen", False)))
 
     if args.self_test:
         return _self_test(parser)
