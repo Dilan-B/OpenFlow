@@ -125,6 +125,13 @@ class OpenFlowApp:
 
         macos_layout.install()
 
+        # Before anything dials out: on a network whose IPv6 cannot reach
+        # anything, every cloud call waits out one full timeout per AAAA record
+        # before falling back to IPv4, which turns a 3 s dictation into 100 s.
+        from . import net
+
+        net.prefer_ipv4_if_broken()
+
         # Claim the lock before opening the microphone or binding the hotkey:
         # a second instance must not touch either. If one is already running it
         # gets raised instead, so clicking the shortcut behaves as expected.
