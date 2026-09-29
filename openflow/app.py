@@ -130,7 +130,7 @@ class OpenFlowApp:
         # before falling back to IPv4, which turns a 3 s dictation into 100 s.
         from . import net
 
-        net.prefer_ipv4_if_broken()
+        net.install()
 
         # Claim the lock before opening the microphone or binding the hotkey:
         # a second instance must not touch either. If one is already running it

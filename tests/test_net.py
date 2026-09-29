@@ -45,39 +45,78 @@ class Ordering(unittest.TestCase):
         self.assertEqual(net.ipv4_first([V6A, V6B]), [V6A, V6B])
 
 
-class Install(unittest.TestCase):
+class Verdict(unittest.TestCase):
+    """The verdict is re-derived on a TTL. A once-at-startup answer would have
+    missed the real incident: the 103 s dictation happened nineteen minutes into
+    a session that began on a working network."""
+
+    def setUp(self):
+        self.addCleanup(net.uninstall)
+        self.calls = 0
+
+    def _probe(self, *results):
+        answers = list(results)
+
+        def probe():
+            self.calls += 1
+            return answers[min(self.calls, len(answers)) - 1]
+
+        return probe
+
+    def test_verdict_is_cached_within_the_ttl(self):
+        net.install(probe=self._probe(True))
+        net.ipv6_usable(now=1000.0)
+        net.ipv6_usable(now=1000.0 + net.HEALTHY_TTL_S - 1)
+        self.assertEqual(self.calls, 1)
+
+    def test_breakage_is_noticed_once_the_healthy_ttl_expires(self):
+        """The whole point: IPv6 working at startup must not be believed forever."""
+        net.install(probe=self._probe(True, False))
+        self.assertTrue(net.ipv6_usable(now=1000.0))
+        self.assertFalse(net.ipv6_usable(now=1000.0 + net.HEALTHY_TTL_S + 1))
+
+    def test_a_broken_verdict_is_held_longer_than_a_healthy_one(self):
+        """Probing while broken costs a full timeout, and IPv4 is already safe."""
+        self.assertGreater(net.BROKEN_TTL_S, net.HEALTHY_TTL_S)
+        net.install(probe=self._probe(False, True))
+        self.assertFalse(net.ipv6_usable(now=1000.0))
+        self.assertFalse(net.ipv6_usable(now=1000.0 + net.HEALTHY_TTL_S + 1))
+        self.assertTrue(net.ipv6_usable(now=1000.0 + net.BROKEN_TTL_S + 1))
+
+    def test_a_probe_that_raises_is_treated_as_broken(self):
+        def boom():
+            raise OSError("no route to host")
+
+        net.install(probe=boom)
+        self.assertFalse(net.ipv6_usable(now=1000.0))
+
+
+class Resolution(unittest.TestCase):
     def setUp(self):
         self.addCleanup(net.uninstall)
 
-    def test_broken_ipv6_installs_the_reordering(self):
-        self.assertTrue(net.prefer_ipv4_if_broken(probe=lambda: False))
-        infos = socket.getaddrinfo("localhost", 80)
-        families = [info[0] for info in infos]
+    def test_broken_ipv6_reorders_lookups(self):
+        net.install(probe=lambda: False)
+        families = [info[0] for info in socket.getaddrinfo("localhost", 80)]
         self.assertEqual(families, sorted(families, key=lambda f: f != socket.AF_INET))
 
-    def test_working_ipv6_is_left_untouched(self):
-        original = socket.getaddrinfo
-        self.assertFalse(net.prefer_ipv4_if_broken(probe=lambda: True))
-        self.assertIs(socket.getaddrinfo, original)
+    def test_working_ipv6_leaves_the_order_alone(self):
+        net.install(probe=lambda: True)
+        expected = [info[0] for info in net._original_getaddrinfo("localhost", 80)]
+        self.assertEqual([info[0] for info in socket.getaddrinfo("localhost", 80)], expected)
 
     def test_installing_twice_does_not_stack_wrappers(self):
-        net.prefer_ipv4_if_broken(probe=lambda: False)
+        net.install(probe=lambda: False)
         wrapped = socket.getaddrinfo
-        net.prefer_ipv4_if_broken(probe=lambda: False)
+        net.install(probe=lambda: False)
         self.assertIs(socket.getaddrinfo, wrapped)
 
     def test_uninstall_restores_the_real_resolver(self):
         original = socket.getaddrinfo
-        net.prefer_ipv4_if_broken(probe=lambda: False)
+        net.install(probe=lambda: False)
         self.assertIsNot(socket.getaddrinfo, original)
         net.uninstall()
         self.assertIs(socket.getaddrinfo, original)
-
-    def test_a_probe_that_raises_is_treated_as_broken(self):
-        """A probe blowing up must not take the app down with it."""
-        def boom():
-            raise OSError("no route to host")
-        self.assertTrue(net.prefer_ipv4_if_broken(probe=boom))
 
 
 if __name__ == "__main__":
