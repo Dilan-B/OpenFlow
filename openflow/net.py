@@ -99,17 +99,19 @@ def ipv6_usable(now: float | None = None) -> bool:
             log.debug("IPv6 probe failed to run (%s); assuming unusable", exc)
             verdict = False
 
-        changed = verdict != _usable
-        _usable, _checked_at = verdict, now
+        previous, _usable, _checked_at = _usable, verdict, now
 
-        if not verdict and (changed or not _announced):
+        if not verdict and (previous is not False or not _announced):
             _announced = True
             log.warning(
                 "IPv6 cannot reach the network from this machine; preferring "
                 "IPv4 for cloud calls. Left alone this makes every request wait "
                 "out one timeout per IPv6 address before falling back."
             )
-        elif verdict and changed:
+        elif verdict and previous is False:
+            # Only on a real recovery. Saying "again" on the first healthy probe
+            # would invent a breakage that never happened, in the one log a
+            # future reader will be trusting.
             log.info("IPv6 egress is working again; leaving resolution order alone")
         return verdict
 

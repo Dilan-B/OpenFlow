@@ -83,6 +83,20 @@ class Verdict(unittest.TestCase):
         self.assertFalse(net.ipv6_usable(now=1000.0 + net.HEALTHY_TTL_S + 1))
         self.assertTrue(net.ipv6_usable(now=1000.0 + net.BROKEN_TTL_S + 1))
 
+    def test_first_healthy_probe_does_not_claim_a_recovery(self):
+        """Claiming a recovery on a first look would invent a breakage that
+        never happened -- in the one log a future reader will be trusting."""
+        net.install(probe=lambda: True)
+        with self.assertNoLogs("openflow.net", level="INFO"):
+            net.ipv6_usable(now=1000.0)
+
+    def test_a_real_recovery_is_reported(self):
+        net.install(probe=self._probe(False, True))
+        net.ipv6_usable(now=1000.0)
+        with self.assertLogs("openflow.net", level="INFO") as caught:
+            net.ipv6_usable(now=1000.0 + net.BROKEN_TTL_S + 1)
+        self.assertIn("working again", " ".join(caught.output))
+
     def test_a_probe_that_raises_is_treated_as_broken(self):
         def boom():
             raise OSError("no route to host")
