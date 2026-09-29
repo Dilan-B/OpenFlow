@@ -100,6 +100,14 @@ jobs:
       - name: Build
         run: pyinstaller OpenFlow.spec --noconfirm --clean
 
+      # One certificate for every release, so macOS keeps the user's
+      # Accessibility / Input Monitoring / Microphone grants across updates.
+      - name: Sign
+        env:
+          MACOS_SIGNING_CERT: ${{ secrets.MACOS_SIGNING_CERT }}
+          MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+        run: bash scripts/sign_macos.sh dist/OpenFlow.app
+
       - name: Smoke-test the frozen build
         shell: pwsh
         run: ./scripts/smoke_frozen_build.ps1 -ExePath dist/OpenFlow.app/Contents/MacOS/OpenFlow
@@ -113,10 +121,13 @@ jobs:
           path: dist_installer/OpenFlow-mac.dmg
           if-no-files-found: error
 
-  # Both installers ship unsigned -- a Windows code signing certificate and an
-  # Apple Developer ID are paid, identity-verified purchases, and this project
-  # isn't buying either. SmartScreen and Gatekeeper both warn on first launch;
-  # the README says how to get past each.
+  # Neither installer carries a trusted signature -- a Windows code signing
+  # certificate and an Apple Developer ID are paid, identity-verified
+  # purchases, and this project isn't buying either. The Mac app is signed
+  # with the project's own certificate (scripts/sign_macos.sh), which keeps
+  # permissions across updates but does not satisfy Gatekeeper. SmartScreen
+  # and Gatekeeper both warn on first launch; the README says how to get past
+  # each.
   publish:
     runs-on: ubuntu-latest
     needs: [version, windows, macos]
