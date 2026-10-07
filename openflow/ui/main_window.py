@@ -18,7 +18,7 @@ import sys
 import time
 
 from PySide6.QtCore import Qt, QRect, QRectF, QTimer
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QPushButton, QScrollArea, QSizePolicy,
@@ -34,7 +34,7 @@ from ..formatting import (
 )
 from ..history import History
 from ..personalization import Personalization
-from . import theme
+from . import icons, theme
 
 log = logging.getLogger(__name__)
 
@@ -140,20 +140,29 @@ def logo_pixmap(size: int = 26) -> QPixmap:
                          Qt.TransformationMode.SmoothTransformation)
 
 
+def _icon_font() -> str | None:
+    families = set(QFontDatabase.families())
+    for family in ("Segoe Fluent Icons", "Segoe MDL2 Assets"):
+        if family in families:
+            return family
+    return None
+
+
 def fluent_icon(glyph: str, color: str, px: int = 15) -> QIcon:
-    """Render a Segoe Fluent Icons glyph into a QIcon."""
+    """Render a Segoe Fluent Icons glyph into a QIcon -- or, where that font
+    is missing (macOS), the matching drawing from ``icons``."""
     pixmap = QPixmap(px * 2, px * 2)
     pixmap.setDevicePixelRatio(2)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    font = QFont("Segoe Fluent Icons")
-    if not font.exactMatch():
-        font = QFont("Segoe MDL2 Assets")
-    font.setPixelSize(px)
-    painter.setFont(font)
     painter.setPen(QColor(color))
-    painter.drawText(QRectF(0, 0, px, px), Qt.AlignmentFlag.AlignCenter, glyph)
+    family = _icon_font()
+    if family is not None or not icons.draw(painter, glyph, px):
+        font = QFont(family or "Segoe Fluent Icons")
+        font.setPixelSize(px)
+        painter.setFont(font)
+        painter.drawText(QRectF(0, 0, px, px), Qt.AlignmentFlag.AlignCenter, glyph)
     painter.end()
     return QIcon(pixmap)
 

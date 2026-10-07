@@ -100,6 +100,7 @@ class OpenFlowApp:
         self.single_instance = None
         self.paused = False
         self._hotkeys_reported_dead = False
+        self._hotkeys_checked_at = 0.0
         # macOS: waiting on Accessibility / Input Monitoring. See
         # input/macos_permissions.py and _check_permissions.
         self._awaiting_permissions = False
@@ -744,10 +745,19 @@ class OpenFlowApp:
             log.error("hotkey listener unavailable: %s", exc)
 
     def _check_hotkeys_alive(self) -> None:
-        """A dead pynput thread is indistinguishable from an idle app: no
-        error, no keys. Say so once, rather than letting it look healthy."""
+        """A dead or disabled listener is indistinguishable from an idle app:
+        no error, no keys. Bring it back; if that fails, say so once rather
+        than letting it look healthy."""
         if self._hotkeys_reported_dead or self.hotkeys is None:
             return
+        now = time.monotonic()
+        if now - self._hotkeys_checked_at < 2.0:
+            return
+        self._hotkeys_checked_at = now
+        try:
+            self.hotkeys.heal()
+        except Exception:
+            log.exception("could not restart the hotkey listener")
         if self.hotkeys.alive:
             return
         self._hotkeys_reported_dead = True
