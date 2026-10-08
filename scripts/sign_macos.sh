@@ -24,7 +24,19 @@ fi
 WORK="$(mktemp -d)"
 KEYCHAIN="$WORK/signing.keychain-db"
 KEYCHAIN_PASSWORD="$(uuidgen)"
-trap 'security delete-keychain "$KEYCHAIN" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+# codesign resolves the identity through the keychain search list, even with
+# --keychain; put ours on it and restore the original list on the way out.
+ORIGINAL_KEYCHAINS=()
+while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"; line="${line//\"/}"
+    [[ -n "$line" ]] && ORIGINAL_KEYCHAINS+=("$line")
+done < <(security list-keychains -d user)
+cleanup() {
+    security list-keychains -d user -s "${ORIGINAL_KEYCHAINS[@]}" 2>/dev/null || true
+    security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 echo "$MACOS_SIGNING_CERT" | base64 --decode > "$WORK/cert.p12"
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
@@ -34,6 +46,7 @@ security import "$WORK/cert.p12" -k "$KEYCHAIN" \
     -P "${MACOS_SIGNING_CERT_PASSWORD:-}" -T /usr/bin/codesign
 security set-key-partition-list -S apple-tool:,apple: -s \
     -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+security list-keychains -d user -s "$KEYCHAIN" "${ORIGINAL_KEYCHAINS[@]}"
 
 # Self-signed, so it is never "valid" to find-identity -v; pick it by hash.
 IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" \
