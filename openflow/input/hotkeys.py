@@ -12,6 +12,7 @@ must stay non-blocking; the app posts real work onto a worker thread.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -101,9 +102,8 @@ class HotkeyListener:
                 log.warning("could not parse undo combo %r: %s", self.cfg.undo, exc)
                 self._undo_combo = frozenset()
 
-        self._listener = keyboard.Listener(
-            on_press=self._on_press, on_release=self._on_release, suppress=False
-        )
+        self._listener = _make_listener(
+            keyboard, on_press=self._on_press, on_release=self._on_release)
         self._listener.daemon = True
         self._listener.start()
         log.info("hotkey listening: %s (%s)", self.cfg.trigger, self.cfg.mode)
@@ -117,6 +117,37 @@ class HotkeyListener:
         with it, leaving an app that looks healthy but answers no keys."""
         listener = self._listener
         return bool(listener is not None and listener.running)
+
+    def heal(self) -> bool:
+        """Bring a deaf listener back. Returns True if it had to.
+
+        Two ways the hotkey goes quiet while the app looks fine: pynput's
+        thread dies, or macOS switches the event tap off -- it does that to
+        any tap whose callback is slow, e.g. while local transcription keeps
+        the GIL busy, and pynput never switches it back on.
+        """
+        listener = self._listener
+        if listener is None:
+            return False
+        if not listener.running:
+            log.warning("hotkey listener died; restarting it")
+            self._restart()
+            return True
+        tap = getattr(listener, "_openflow_tap", None)
+        if tap is not None and sys.platform == "darwin":
+            import Quartz
+            if not Quartz.CGEventTapIsEnabled(tap):
+                log.warning("macOS disabled the hotkey event tap; re-enabling it")
+                Quartz.CGEventTapEnable(tap, True)
+                return True
+        return False
+
+    def _restart(self) -> None:
+        self.stop()
+        with self._lock:
+            self._pressed.clear()
+            self._active = self._undo_active = self._command_active = False
+        self.start()
 
     def stop(self) -> None:
         if self._listener is not None:
@@ -296,3 +327,40 @@ class HotkeyListener:
             callback()
         except Exception:
             log.exception("hotkey callback failed")
+
+
+# CGEventTap.h: the pseudo event types a tap receives when macOS turns it off.
+_TAP_DISABLED_BY_TIMEOUT = 0xFFFFFFFE
+_TAP_DISABLED_BY_USER_INPUT = 0xFFFFFFFF
+
+
+def _make_listener(keyboard, *, on_press, on_release):
+    """pynput's Listener, plus on macOS a fix for its tap going deaf.
+
+    macOS disables an event tap whose callback misses its deadline and tells
+    the callback once. pynput ignores that (worse, it can raise on the empty
+    event and stop the thread), so the hotkey silently stops working until the
+    app restarts. Re-enable the tap the moment macOS says it turned it off.
+    """
+    if sys.platform != "darwin":
+        return keyboard.Listener(on_press=on_press, on_release=on_release,
+                                 suppress=False)
+
+    import Quartz
+
+    class _Listener(keyboard.Listener):
+        def _create_event_tap(self):
+            self._openflow_tap = super()._create_event_tap()
+            return self._openflow_tap
+
+        def _handler(self, proxy, event_type, event, refcon):
+            if event_type in (_TAP_DISABLED_BY_TIMEOUT, _TAP_DISABLED_BY_USER_INPUT):
+                tap = getattr(self, "_openflow_tap", None)
+                if tap is not None:
+                    Quartz.CGEventTapEnable(tap, True)
+                log.warning("macOS disabled the hotkey event tap (%#x); re-enabled",
+                            event_type)
+                return event
+            return super()._handler(proxy, event_type, event, refcon)
+
+    return _Listener(on_press=on_press, on_release=on_release, suppress=False)
