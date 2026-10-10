@@ -68,6 +68,7 @@ class HotkeyListener:
         self.paused = False
         self._capture_cb: Callable[[str], None] | None = None
         self._capture_keys: list = []
+        self._restarting = False
 
     # -- setup -------------------------------------------------------------
     def start(self) -> None:
@@ -114,9 +115,15 @@ class HotkeyListener:
     def alive(self) -> bool:
         """Whether pynput's thread is still listening. It can stop on its own
         -- an exception inside the hook takes the thread down and the hotkey
-        with it, leaving an app that looks healthy but answers no keys."""
+        with it, leaving an app that looks healthy but answers no keys.
+
+        ``running`` alone is not enough: on macOS, when the event tap cannot
+        be created (as can happen on the first launch after an update),
+        pynput's thread returns at once but ``running`` stays True. The
+        thread itself is the truth."""
         listener = self._listener
-        return bool(listener is not None and listener.running)
+        return bool(listener is not None and listener.running
+                    and listener.is_alive())
 
     def heal(self) -> bool:
         """Bring a deaf listener back. Returns True if it had to.
@@ -129,10 +136,13 @@ class HotkeyListener:
         listener = self._listener
         if listener is None:
             return False
-        if not listener.running:
-            log.warning("hotkey listener died; restarting it")
+        if not self.alive:
+            if not self._restarting:
+                log.warning("hotkey listener is not running; restarting it")
+            self._restarting = True
             self._restart()
             return True
+        self._restarting = False
         tap = getattr(listener, "_openflow_tap", None)
         if tap is not None and sys.platform == "darwin":
             import Quartz
