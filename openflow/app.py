@@ -746,9 +746,10 @@ class OpenFlowApp:
 
     def _check_hotkeys_alive(self) -> None:
         """A dead or disabled listener is indistinguishable from an idle app:
-        no error, no keys. Bring it back; if that fails, say so once rather
+        no error, no keys. Keep bringing it back -- macOS can refuse the event
+        tap for a while after an update -- and show an error meanwhile rather
         than letting it look healthy."""
-        if self._hotkeys_reported_dead or self.hotkeys is None:
+        if self.hotkeys is None:
             return
         now = time.monotonic()
         if now - self._hotkeys_checked_at < 2.0:
@@ -759,10 +760,15 @@ class OpenFlowApp:
         except Exception:
             log.exception("could not restart the hotkey listener")
         if self.hotkeys.alive:
+            if self._hotkeys_reported_dead:
+                self._hotkeys_reported_dead = False
+                log.info("hotkey listener is back")
+                self.window.set_state("paused" if self.paused else "ready")
             return
-        self._hotkeys_reported_dead = True
-        log.error("hotkey listener stopped; dictation will not respond until restart")
-        self.window.set_state("error")
+        if not self._hotkeys_reported_dead:
+            self._hotkeys_reported_dead = True
+            log.error("hotkey listener stopped; retrying every 2s")
+            self.window.set_state("error")
 
     def _handle(self, kind: str, payload) -> None:
         if kind == "show":
