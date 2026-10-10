@@ -107,12 +107,13 @@ class PromptHygiene(unittest.TestCase):
         for example_in, _out in FEW_SHOT:
             self.assertNotIn(example_in.lower(), scored)
 
-    def test_few_shot_outputs_only_delete(self):
-        """Every pair must obey the same containment rule the guard enforces."""
-        from openflow.llm.base import check_containment
+    def test_few_shot_outputs_pass_the_guard(self):
+        """Every pair must obey the containment rule the guard enforces:
+        deletions, plus sound-alike repairs of misheard words."""
+        from openflow.llm.base import unexplained_words
 
         for example_in, example_out in FEW_SHOT:
-            self.assertEqual(check_containment(example_out, example_in), [],
+            self.assertEqual(unexplained_words(example_out, example_in), [],
                              example_in)
 
 

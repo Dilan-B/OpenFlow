@@ -34,6 +34,19 @@ class Containment(unittest.TestCase):
             sanitize("I like Al Gore.", original="um, I like algorithms")
         self.assertIn("did not say", str(ctx.exception))
 
+    def test_sanitize_accepts_sound_alike_repairs(self):
+        for out, spoken in (
+            ("We should accept their offer.", "we should except their offer"),
+            ("She was very supportive of it.", "she was very supported of it"),
+            ("I'll send it by Friday.", "I'll send it buy friday"),
+        ):
+            self.assertEqual(sanitize(out, original=spoken), out)
+
+    def test_sanitize_rejects_an_invented_clause(self):
+        with self.assertRaises(ProviderError):
+            sanitize("Ship it Friday and tell the whole team.",
+                     original="ship it friday")
+
     def test_allows_pure_deletion(self):
         self.assertEqual([], check_containment("I like algorithms.", "um I like algorithms"))
 

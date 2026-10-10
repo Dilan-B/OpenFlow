@@ -57,6 +57,7 @@ HARD_FILLERS: tuple[tuple[str, ...], ...] = (
     ("mhm",),
     ("you", "know"),
     ("so", "yeah"),
+    ("so", "basically"),
     ("i", "guess", "you", "know"),
 )
 

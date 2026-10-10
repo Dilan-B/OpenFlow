@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Protocol, runtime_checkable
 
 from ..text.punctuation import normalize_whitespace, strip_wrapping_quotes
@@ -80,6 +81,36 @@ def check_containment(output: str, original: str,
     return unseen
 
 
+# A repaired mishearing sounds like what the recognizer wrote, and nearly
+# always shares its spelling: "except" -> "accept", "supported" ->
+# "supportive", "buy" -> "by". A wholesale substitution does not: "algorithms"
+# -> "Al Gore". Beyond sound-alikes, one unrelated word per this many spoken
+# words covers a dropped "it" or "on" without admitting an invented clause.
+NEAR_FORM_RATIO = 0.6
+NEAR_FORM_PREFIX = 5
+WORDS_PER_FREE_REPAIR = 12
+
+
+def _near_form(word: str, source: set[str]) -> bool:
+    for seen in source:
+        if len(word) >= NEAR_FORM_PREFIX and word[:NEAR_FORM_PREFIX] == seen[:NEAR_FORM_PREFIX]:
+            return True
+        if SequenceMatcher(None, word, seen).ratio() >= NEAR_FORM_RATIO:
+            return True
+    return False
+
+
+def unexplained_words(output: str, original: str,
+                      allowed: frozenset[str] | set[str] = frozenset()) -> list[str]:
+    """New words that are not a sound-alike repair of anything the speaker
+    said -- what check_containment finds, minus plausible mishearing fixes."""
+    invented = check_containment(output, original, allowed)
+    if not invented:
+        return []
+    source = {w for word in _tokens(original) for w in _expand(word)}
+    return [word for word in invented if not _near_form(word, source)]
+
+
 def sanitize(output: str, *, original: str, strict: bool = True,
              allowed: frozenset[str] | set[str] = frozenset()) -> str:
     """Enforce PRD instruction 4 defensively.
@@ -87,7 +118,8 @@ def sanitize(output: str, *, original: str, strict: bool = True,
     Models -- especially small local ones -- leak preambles and quote wrapping
     no matter what the prompt says. In strict mode (dictation cleanup) we add
     two structural checks that no prompt can be talked out of: the output may
-    not grow, and it may not contain words the speaker never said. Transforms
+    not grow, and it may not contain words the speaker never said beyond
+    sound-alike repairs and a small per-dictation allowance. Transforms
     (deliberate rewrites) run with ``strict=False``.
 
     ``allowed`` holds words the model may write although the speaker did not
@@ -115,8 +147,12 @@ def sanitize(output: str, *, original: str, strict: bool = True,
     if len(text) > max(40, int(len(original.strip()) * grow)):
         raise ProviderError("completion longer than input; model rewrote instead of edited")
 
-    invented = check_containment(text, original, allowed)
-    if invented:
+    # Cleanup also repairs what the recognizer misheard, so a new word is
+    # accepted when it sounds like one the speaker said, and a few others per
+    # dictation for dropped small words. More than that is a rewrite.
+    invented = unexplained_words(text, original, allowed)
+    budget = len(_tokens(original)) // WORDS_PER_FREE_REPAIR
+    if len(invented) > budget:
         raise ProviderError(
             f"completion introduced words the speaker did not say: {invented[:5]}"
         )
