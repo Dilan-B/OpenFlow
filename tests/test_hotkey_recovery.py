@@ -20,8 +20,12 @@ from openflow.input.hotkeys import HotkeyListener  # noqa: E402
 
 
 class _FakeListener:
-    def __init__(self, running: bool) -> None:
+    def __init__(self, running: bool, thread_alive: bool | None = None) -> None:
         self.running = running
+        self._thread_alive = running if thread_alive is None else thread_alive
+
+    def is_alive(self) -> bool:
+        return self._thread_alive
 
 
 def _listener() -> HotkeyListener:
@@ -41,6 +45,16 @@ class Heal(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(h._pressed, set())
         self.assertFalse(h._active)
+
+    def test_restarts_when_the_tap_was_never_created(self):
+        # pynput leaves ``running`` True when macOS refuses the event tap; only
+        # the thread having exited gives it away.
+        h = _listener()
+        h._listener = _FakeListener(running=True, thread_alive=False)
+        self.assertFalse(h.alive)
+        with mock.patch.object(h, "start") as start, mock.patch.object(h, "stop"):
+            self.assertTrue(h.heal())
+        start.assert_called_once()
 
     def test_leaves_a_healthy_listener_alone(self):
         h = _listener()
